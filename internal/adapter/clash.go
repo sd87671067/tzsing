@@ -10,6 +10,9 @@ import (
 )
 
 type Connection struct {
+	Metadata struct {
+		Type string `json:"type"`
+	} `json:"metadata"`
 	ID       string   `json:"id"`
 	Chains   []string `json:"chains"`
 	Upload   int64    `json:"upload"`
@@ -59,12 +62,16 @@ func (c *Clash) Collect() ([]model.Tag, error) {
 	if e := c.get("/proxies", &p); e != nil {
 		return nil, e
 	}
+	rawProxies := p.Proxies
 	p.Proxies = c.discovered(p.Proxies)
 	var snap Snapshot
 	if e := c.get("/connections", &snap); e != nil {
 		return nil, e
 	}
 	now := time.Now()
+	if c.inventory != nil && c.inventory.Inbounds != nil {
+		return c.inboundTags(rawProxies, &snap, now), nil
+	}
 	elapsed := now.Sub(c.last).Seconds()
 	if elapsed <= 0 {
 		elapsed = 2

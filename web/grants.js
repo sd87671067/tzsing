@@ -16,12 +16,12 @@ class PermissionPicker {
  render(){
   this.root.replaceChildren();this.groups=[];
   for(const s of this.servers){
-   const group=node('fieldset','grant-group'),legend=node('legend','',s.name),server=this.checkbox('允许访问服务器',this.allowed.has(s.id),checked=>{if(checked)this.allowed.add(s.id);else{this.allowed.delete(s.id);this.hosts.delete(s.id);for(const t of s.tags)this.selected.delete(this.key(s.id,t.raw_tag))}});
+   const group=node('fieldset','grant-group'),legend=node('legend','',s.name),server=this.checkbox('允许访问服务器',this.allowed.has(s.id),checked=>{if(checked)this.allowed.add(s.id);else{this.allowed.delete(s.id);this.hosts.delete(s.id);for(const t of s.tags)this.selected.delete(this.key(s.id,t.grant_tag||t.raw_tag))}});
    server.input.dataset.server=s.id;group.append(legend,server.row);
    const toolbar=node('div','grant-toolbar'),all=this.checkbox('选择本组节点',false,checked=>this.select(checked,s.id)),count=node('span','muted');all.input.dataset.group=s.id;toolbar.append(all.row,count);group.append(toolbar);
    const host=this.checkbox('服务器主机状态',this.hosts.has(s.id),checked=>{if(checked){this.hosts.add(s.id);this.allowed.add(s.id)}else this.hosts.delete(s.id)});host.input.dataset.host=s.id;group.append(host.row);
    const choices=[];
-   for(const t of s.tags){const key=this.key(s.id,t.raw_tag),c=this.checkbox(t.name+' · '+t.category+' · '+t.raw_tag,this.selected.has(key),checked=>{if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)});c.input.dataset.node=t.id;group.append(c.row);choices.push({...c,t,key})}
+   for(const t of s.tags){const key=this.key(s.id,t.grant_tag||t.raw_tag),c=this.checkbox(t.name+' · '+t.category+' · '+t.raw_tag,this.selected.has(key),checked=>{if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)});c.input.dataset.node=t.id;group.append(c.row);choices.push({...c,t,key})}
    if(!s.tags.length)group.append(node('p','muted','尚未发现可授权节点；新节点默认不授权。'));
    this.groups.push({s,group,server,all,host,count,choices});this.root.append(group)
   }
@@ -37,7 +37,7 @@ class PermissionPicker {
   const all=$('#grant-all');all.checked=visible>0&&chosen===visible;all.indeterminate=chosen>0&&chosen<visible;all.disabled=!visible;
   text($('#grant-count'),'已选 '+this.selected.size+' 个节点 · '+this.allowed.size+' 台服务器')
  }
- select(checked,server){for(const s of this.servers){if(server&&s.id!==server)continue;for(const t of s.tags){if(!this.matches(s,t))continue;const key=this.key(s.id,t.raw_tag);if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)}}}
+ select(checked,server){for(const s of this.servers){if(server&&s.id!==server)continue;for(const t of s.tags){if(!this.matches(s,t))continue;const key=this.key(s.id,t.grant_tag||t.raw_tag);if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)}}}
  search(value){this.query=value.trim().toLocaleLowerCase();this.refresh()}
  status(dirty){text($('#grant-status'),dirty?'有未保存的权限修改':'权限已载入；新节点默认不授权');$('#grant-status').dataset.dirty=String(dirty)}
  payload(user){return{user_id:Number(user),servers:[...this.allowed],hosts:[...this.hosts],grants:[...this.selected].map(key=>{const [server,tag]=JSON.parse(key);return{server,tag}})}}

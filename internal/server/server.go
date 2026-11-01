@@ -46,6 +46,8 @@ type App struct {
 	limits         map[string]bucket
 	sockets        map[int64]map[*websocket.Conn]bool
 	hashSem        chan struct{}
+	ControlSocket  string
+	ControlServer  string
 	controlNonces  map[string]controlNonce
 	dummy          string
 }
@@ -155,6 +157,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: "tz_session", Value: "", Path: a.Prefix + "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 		reply(w, 200, map[string]bool{"ok": true})
+		return
+	}
+	if path == "/api/archives" && r.Method == "GET" {
+		a.archives(w, r, u)
 		return
 	}
 	if path == "/api/snapshot" && r.Method == "GET" {
@@ -606,7 +612,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 			_, e = tx.Exec("DELETE FROM grants WHERE user_id=?", v.UserID)
 		}
 		for _, g := range v.Grants {
-			if !valid.MatchString(g.Server) || (g.Tag != "*" && !validTag(g.Tag)) {
+			if !valid.MatchString(g.Server) || (g.Tag != "*" && !validTag(g.Tag) && !(strings.HasPrefix(g.Tag, "inbound:") && validTag(strings.TrimPrefix(g.Tag, "inbound:")))) {
 				fail(w, 400)
 				return
 			}
@@ -805,7 +811,7 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) {
 	}
 	seen := map[string]bool{}
 	for _, t := range v.Tags {
-		if !validTag(t.Name) || seen[t.Name] || len(t.Type) > 64 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
+		if (!(t.Identity == "inbound" && validTag(t.InboundTag) && t.Name == "inbound:"+t.InboundTag) && !validTag(t.Name)) || seen[t.Name] || len(t.Type) > 64 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
 			fail(w, 400)
 			return
 		}

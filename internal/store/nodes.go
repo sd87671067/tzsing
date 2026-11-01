@@ -27,7 +27,7 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		var b []byte
 		if s.QueryRow("SELECT data FROM exit_cache WHERE server=? AND tag=?", server, raw).Scan(&b) == nil {
 			var old model.Exit
-			if json.Unmarshal(b, &old) == nil && old.Verified {
+			if json.Unmarshal(b, &old) == nil && old.Verified && (t.Identity != "inbound" || (t.Egress != "" && old.Path == t.Egress+"@"+t.RouteVersion)) {
 				old.Error = "待重新验证"
 				if t.IP != nil {
 					old.Attempted = t.IP.Attempted
@@ -47,6 +47,9 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		if !valid {
 			t.IP = nil
 		}
+	}
+	if t.Identity == "inbound" && t.Egress == "" {
+		t.IP = nil
 	}
 	t.Classify()
 	if t.Verification == "verified" && (time.Now().Unix()-t.IP.Updated > 3600 || t.State == "unknown") {
@@ -88,18 +91,29 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.Name = personal
 	}
 	t.FallbackName = global == "" && personal == ""
+	t.GrantTag = ""
 	t.RawTag = ""
 	t.GlobalName = ""
 	t.NeedsName = false
 	show := u.Role == "admin" || s.Setting("show_raw_tag", 0) == 1
 	if show {
 		t.RawTag = raw
+		if t.Identity == "inbound" {
+			t.RawTag = t.InboundTag
+		}
 	}
 	if u.Role == "admin" {
+		t.GrantTag = raw
 		t.GlobalName = global
 		t.NeedsName = global == ""
 	}
-	if t.Egress != "" {
+	if t.Identity == "inbound" {
+		if !show {
+			t.InboundTag = ""
+			t.Egress = ""
+		}
+	}
+	if t.Identity != "inbound" && t.Egress != "" {
 		var label, id string
 		var n int64
 		if err := s.QueryRow("SELECT rowid,id,name FROM nodes WHERE server=? AND tag=?", server, t.Egress).Scan(&n, &id, &label); err == nil {

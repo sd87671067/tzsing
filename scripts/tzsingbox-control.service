@@ -1,0 +1,31 @@
+[Unit]
+Description=tzsing restricted sing-box configuration controller
+After=network-online.target sing-box.service
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/tzsingbox/tzsingbox control
+Environment=CONTROL_CONFIG=/etc/tzsingbox/control.json
+Environment=GOMEMLIMIT=96MiB
+Environment=GOMAXPROCS=1
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/sing-box /var/lib/tzsingbox-control /run/tzsingbox-control /var/lib/tzsingbox-inventory
+RuntimeDirectory=tzsingbox-control
+StateDirectory=tzsingbox-control
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER
+MemoryMax=160M
+TasksMax=48
+TimeoutStopSec=185
+[Install]
+WantedBy=multi-user.target

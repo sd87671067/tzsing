@@ -13,13 +13,15 @@ type controlNonce struct {
 	User    int64
 	Node    string
 	Expires time.Time
+	Plan    string
+	Action  string
 }
 
 const controlDisabled = "未配置受限控制 Agent、专门分享权限及经验证的安全热更新/出口校验机制；生产写入、连接探测与凭据导出均禁用"
 
 // No production configuration or credential source is mounted into the web app.
 // Nonces bind offline previews to the current session, actor and authorized node.
-func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, path string) {
+func (a *App) offlineControlAPI(w http.ResponseWriter, r *http.Request, u store.User, path string) {
 	if u.Role != "admin" {
 		fail(w, 403)
 		return
@@ -51,7 +53,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			}
 		}
 		token := auth.Random()
-		a.controlNonces[auth.Digest(token)] = controlNonce{auth.Digest(cookie.Value), u.ID, id, time.Now().Add(2 * time.Minute)}
+		a.controlNonces[auth.Digest(token)] = controlNonce{Session: auth.Digest(cookie.Value), User: u.ID, Node: id, Expires: time.Now().Add(2 * time.Minute)}
 		reply(w, 200, map[string]any{"preview": true, "apply": false, "restore": false, "probe": false, "share": false, "reason": controlDisabled, "nonce": token, "impact": "尚无权威配置依赖图；不能确认 Tag、路由和连接影响范围，不允许应用"})
 		return
 	}

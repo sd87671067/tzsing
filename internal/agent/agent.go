@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -80,6 +81,9 @@ func Run(ctx context.Context, path string) error {
 	backoff := time.Second
 	var last []model.Tag
 	var checked time.Time
+	routesVerified := false
+	routeVersion := ""
+	var appliedExit *adapter.AppliedExit
 	for {
 		if time.Since(checked) >= 30*time.Second {
 			checked = time.Now()
@@ -87,13 +91,21 @@ func Run(ctx context.Context, path string) error {
 				inv, err := adapter.ReadInventory(c.InventoryFile)
 				if err == nil {
 					clash.SetInventory(inv)
+					routesVerified = inv.RoutesVerified
+					routeVersion = inv.ConfigHash
+					appliedExit = inv.AppliedExit
 					if inv.RoutesVerified {
 						det.SetProxies(c.Proxies)
 					} else {
 						det.SetProxies(nil)
 					}
 				} else {
-					log.Print("outbound inventory unavailable; retaining last inventory")
+					log.Print("inventory unavailable; preserving identities with unknown routes")
+					clash.InvalidateInventory()
+					routesVerified = false
+					routeVersion = "unavailable"
+					appliedExit = nil
+					det.SetProxies(nil)
 				}
 			}
 		}
@@ -119,7 +131,33 @@ func Run(ctx context.Context, path string) error {
 		}
 		for i := range tags {
 			if tags[i].Kind == "actual" {
-				tags[i].IP = det.Get(tags[i].Name)
+				probeTag := tags[i].Name
+				if tags[i].Identity == "inbound" {
+					probeTag = tags[i].Egress
+				}
+				if probeTag != "" {
+					if tags[i].Identity != "inbound" || routesVerified {
+						tags[i].IP = det.Get(probeTag)
+						if tags[i].Identity == "inbound" && tags[i].IP != nil {
+							tags[i].IP.Path = probeTag + "@" + routeVersion
+						}
+					}
+				}
+			}
+		}
+		for i := range tags {
+			t := &tags[i]
+			if t.Identity == "inbound" && appliedExit != nil && appliedExit.ConfigHash == routeVersion && appliedExit.Tag == t.InboundTag && t.Egress != "" && time.Now().Unix()-appliedExit.At < 3600 {
+				ip := net.ParseIP(appliedExit.IP)
+				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
+					v := &model.Exit{Verified: true, Updated: appliedExit.At, Source: "受限控制器 · 实际目标入站路径", Path: t.Egress + "@" + routeVersion}
+					if ip.To4() != nil {
+						v.IPv4 = ip.String()
+					} else {
+						v.IPv6 = ip.String()
+					}
+					t.IP = v
+				}
 			}
 		}
 		report := model.Report{ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}

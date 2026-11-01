@@ -1,5 +1,5 @@
-// Package control owns offline link validation. It has no filesystem writer,
-// network client, process launcher or reference to the monitoring collector.
+// Package control owns strict URI parsing and restricted host transactions.
+// Monitoring DTOs never serialize configuration credentials.
 package control
 
 import (
@@ -99,6 +99,15 @@ func Parse(raw string) (*Link, error) {
 			l.method = l.username
 		}
 		switch l.method {
+		case "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+			b, e := base64.StdEncoding.DecodeString(l.secret)
+			want := 32
+			if l.method == "2022-blake3-aes-128-gcm" {
+				want = 16
+			}
+			if e != nil || len(b) != want {
+				return nil, ErrLink
+			}
 		case "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305":
 		default:
 			return nil, ErrLink
@@ -283,5 +292,21 @@ func (l *Link) Preview() Preview {
 	if l.kind == "http" {
 		v = "HTTP URI 导入未核验，禁用"
 	}
-	return Preview{l.kind, l.host, l.port, t, s, l.secret != "", v, sr}
+	host := l.host
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() != nil {
+			parts := strings.Split(host, ".")
+			host = parts[0] + "." + parts[1] + ".*.*"
+		} else {
+			host = "IPv6（已脱敏）"
+		}
+	} else {
+		parts := strings.Split(host, ".")
+		if len(parts) > 1 {
+			host = "***." + strings.Join(parts[len(parts)-2:], ".")
+		} else {
+			host = "***"
+		}
+	}
+	return Preview{l.kind, host, l.port, t, s, l.secret != "", v, sr}
 }

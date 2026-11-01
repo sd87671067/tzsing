@@ -1,6 +1,12 @@
 package model
 
 type Tag struct {
+	GrantTag     string `json:"grant_tag,omitempty"`
+	RouteVersion string `json:"route_version,omitempty"`
+	Identity     string `json:"identity,omitempty"`
+	InboundTag   string `json:"inbound_tag,omitempty"`
+	RouteReason  string `json:"route_reason,omitempty"`
+
 	FallbackName   bool   `json:"-"`
 	ExpiresAt      int64  `json:"expires_at,omitempty"`
 	BillingDay     int    `json:"billing_day,omitempty"`

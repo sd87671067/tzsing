@@ -16,6 +16,7 @@ import (
 	"time"
 	"tzsingbox/internal/agent"
 	"tzsingbox/internal/auth"
+	"tzsingbox/internal/control"
 	"tzsingbox/internal/server"
 	"tzsingbox/internal/store"
 	"tzsingbox/web"
@@ -50,6 +51,9 @@ func run() error {
 		}
 		return nil
 	}
+	if mode == "control" {
+		return control.RunController(ctx, env("CONTROL_CONFIG", "/etc/tzsingbox/control.json"))
+	}
 	if mode == "agent" {
 		return agent.Run(ctx, env("AGENT_CONFIG", "/etc/tzsingbox/agent.json"))
 	}
@@ -58,6 +62,33 @@ func run() error {
 		return e
 	}
 	defer db.Close()
+	if mode == "grant-control" {
+		user, err := db.ByName(os.Getenv("CONTROL_ADMIN"))
+		if err != nil || user.Role != "admin" || user.Disabled {
+			return fmt.Errorf("enabled administrator required")
+		}
+		allowed := map[string]bool{"change": true, "restore": true, "copy": true, "import_shadowrocket": true, "import_v2rayn": true, "view": true}
+		actions := strings.Split(os.Getenv("CONTROL_ACTIONS"), ",")
+		for _, action := range actions {
+			if !allowed[action] {
+				return fmt.Errorf("invalid dedicated permission")
+			}
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, action := range actions {
+			if _, err = tx.Exec("INSERT OR IGNORE INTO control_permissions VALUES(?,?)", user.ID, action); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), user.Name, "local", "control_permissions_provisioned"); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if mode == "init-admin" {
 		b, e := io.ReadAll(io.LimitReader(os.Stdin, (64<<10)+1))
 		if e != nil {
@@ -96,6 +127,8 @@ func run() error {
 	}
 	app := server.New(db, prefix, env("PUBLIC_ORIGIN", "https://localhost"), http.FileServer(http.FS(web.Files())))
 	app.TrustedProxy = os.Getenv("TRUSTED_PROXY")
+	app.ControlSocket = os.Getenv("CONTROL_SOCKET")
+	app.ControlServer = env("CONTROL_SERVER", "local")
 	httpServer := &http.Server{Addr: env("LISTEN", ":8080"), Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	tlsServer := &http.Server{Addr: env("AGENT_LISTEN", ":8443"), Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	errs := make(chan error, 2)

@@ -1,47 +1,53 @@
-# 管理边界与协议支持
+# 节点控制与凭据边界
 
-监控与配置控制分离。Web 和监控 Agent 不挂载、不读取、不写入生产 sing-box 认证配置；没有 root shell、任意路径写入、外部命令或用户 URL 下载入口。浏览器只使用当前授权快照的节点 ID。
+Web/监控 Agent 不挂载生产 sing-box 配置。独立宿主机控制器 `tzsingbox control` 使用固定配置路径、固定 sing-box 二进制与固定 systemd 单元；只监听 Unix socket，校验调用 UID。接口不接受命令、可执行文件、任意配置路径或订阅下载 URL。systemd 沙箱见 `scripts/tzsingbox-control.service`。
 
-## 当前启用
+## 独立授权与按需分享
 
-管理员可在卡片三点菜单打开独立出站 Modal，粘贴单节点链接并进行**离线解析预览**。服务器返回协议、地址、端口、传输、安全模式和认证存在标记，不返回密码、UUID、原始 URI 或完整配置。不持久化输入；关闭时清除，未保存关闭使用自定义确认框。
+管理员角色之外还必须具备 `control_permissions` 中的独立权限：`copy`、`import_shadowrocket`、`import_v2rayn`、`view`、`change`、`restore`。普通用户即使错误取得权限行也不能调用。权限不自动授予新增管理员；由宿主机操作者通过 `grant-control` 命令明确配置：
 
-复用现有会话、角色、节点授权、Origin/CSRF 与审计。预览 nonce 与用户/节点绑定，2 分钟有效、一次使用；一次用户只保留一个 nonce。审计仅记录操作类型，不记录输入、地址或认证资料。普通用户无控制接口权限，撤权关闭 WS 并清除旧界面。
+```sh
+CONTROL_ADMIN=your-admin CONTROL_ACTIONS=copy,import_shadowrocket,import_v2rayn,view,change,restore DB_PATH=/your/data/tzsingbox.db /your/tzsingbox grant-control
+```
 
-| URI | 接受的子集 | 明确拒绝 |
-| --- | --- | --- |
-| socks / socks5 | 显式端口、可选 userinfo、IPv4/IPv6/域名 | 无端口、扩展查询参数 |
-| http / https | 代理地址、userinfo、默认 80/443 | 订阅路径、任意下载、扩展参数 |
-| ss | SIP002 userinfo，AES-128/256-GCM、chacha20-ietf-poly1305 | 插件、旧整串 Base64、其他加密方式 |
-| vmess | v2 JSON Base64，TCP、alterId 0、可选 TLS | WS/gRPC、HTTP 伪装、未知字段 |
-| vless | UUID、TCP/raw，none/TLS/Reality、可选 vision | WS/gRPC、无效公钥/short-id/flow |
-| trojan | 单密码、TCP/TLS | WS/gRPC、其他 security |
-| hy2 / hysteria2 | TLS、可选 salamander、SNI | 端口跳跃、Realms、未知参数 |
+所有操作复核当前会话、角色、节点与独立权限；变更类请求检查 Origin/CSRF。状态接口只接受不透明节点 ID。两分钟、一次性的 nonce 绑定会话、用户、节点；预览后产生新的确认票据，绑定控制器计划与配置哈希。分享、预览和确认票据不能互换。所有响应 `Cache-Control: no-store`；审计不含地址、UUID、密码或链接。
 
-没有默默忽略未知参数，也没有根据监控 Tag 猜协议。IP/域名仅作语法检查；解析绝不解析 DNS 或连接目标，允许预览私网地址不等于允许探测私网。
+真实入站配置是唯一分享源，出站 TAG/内部 SOCKS/管理端口不能分享。分享支持 VLESS TCP+REALITY 和 Shadowsocks SIP002（包括单密钥 2022）；不支持的传输、入站或无可信对外映射的回环监听返回明确错误。控制器根配置中的 `endpoints` 必须由操作者核实公网映射，不能把监控 IP 当作入口地址。多用户入站由管理员明确选择认证资料。REALITY 公钥用 X25519 从服务端密钥派生，私钥从不返回 Web。
 
-规范来源：[SS SIP002](https://shadowsocks.org/doc/sip002.html)、[Hysteria2 URI](https://v2.hysteria.network/docs/developers/URI-Scheme/)、[v2rayN 订阅说明](https://github.com/2dust/v2rayN/wiki/Description-of-subscription)。格式解析测试不能代替实际客户端导入测试。
+Shadowrocket、v2rayN 通过客户端的“从剪贴板导入”使用标准单节点 URI；不通过 URL 查询参数携带凭据，不伪造不通用的应用深链。浏览器复制后提示“复制成功”，不能证明客户端已经导入。未安装原生客户端时，只能核验 URI 规范和浏览器交互，不能宣称原生客户端实测通过。2022 密码按 SIP002 使用百分号编码的 userinfo。
 
-## 当前禁用
+监控 API/WS 不返回分享资料。只有管理员主动操作后，受保护 POST 才按需返回单份连接凭据。查看窗口关闭或撤权后移除内容；敏感复制失败时不自动展开链接。浏览器和剪贴板必然接触用户主动请求的必要凭据，不承诺浏览器绝对保密。
 
-- Shadowrocket/v2rayN 导入及节点链接复制：没有专门的凭据分享权限和权威客户端入站资料，不能把监控 Tag、内部 SOCKS 或服务端私有配置当作客户端链接。Shadowrocket 尚未完成实际协议核验；HTTP 的 v2rayN URI 导入也未核验。菜单显示禁用原因与凭据风险，不生成伪造 URI。
-- 检测连接：没有管理员审批的目标白名单、网络隔离、DNS 绑定和防 SSRF 拨号器。
-- 确认更换/恢复：没有经过验证的独立受限控制 Agent、版本化配置源、完整路由/依赖影响图和无中断安全应用机制。接口硬拒绝（501），不是前端隐藏。没有修改生产配置、发送 SIGHUP 或重启生产核心。
+## 出站更换与实际恢复
 
-禁用不是可由普通环境变量解除的开关。启用前必须有独立评审和实际安全机制，不能把 `501` 改为成功或仅增加一个管理员按钮。
+独立 Go Adapter 接受明确单节点 URI，拒绝未知参数和不支持的语义。可应用子集为 SOCKS5、HTTP(S)、SS AEAD/单密钥 SS2022、VLESS TCP/raw（TLS/REALITY）、Trojan TCP/TLS、Hysteria2（TLS、可选 salamander）。VMess TCP JSON 可离线解析预览，当前不允许应用；WS/gRPC、插件、端口跳跃、跳过证书校验和 pinSHA256 等未实现语义明确拒绝。预览中的目标脱敏，不返回凭据；解析与配置检查不代表连接可用。
 
-## 未来安全应用与恢复方案（尚未实现，不能用于生产切换）
+只给目标入站新增专用出站及带入站 AND 条件的路由，插入原 route 规则之前；原有认证条件、rule-set、拒绝规则、其他入站及共享出站不变。兜底规则位于原规则之后，不能绕过原拒绝规则。原始映射、依赖哈希和具体新增项保存在 root-only 快照中。恢复撤销实际新增项，保留原路由，绝不强制 direct。恢复前检查原始路由/依赖和目标入站未被外部改写；有冲突时拒绝覆盖。
 
-1. 独立受限控制 Agent 使用固定配置源，读取版本 SHA 与依赖图，明确列出受影响 Tag、路由、选择器和连接；专门权限、当前密码/二次确认及单次短期操作票据绑定目标和版本。
-2. 在本项目受限目录保存原始出站与完整配置版本（0600），候选通过结构化编辑只修改选定出站，保留路由和其他节点；拒绝引用错误与依赖循环。进程锁与版本比较防止并发覆盖。
-3. 固定二进制、固定参数校验候选。只通过已经验证的事务性热更新机制应用，不用字符串替换、任意命令或盲目重启。若核心不支持则保持禁用。
-4. 受限拨号器通过对应路径验证出口和核心连接；失败自动恢复原版本并验证，恢复操作幂等、有审计。恢复失败需明确报警，不伪造成功。
-5. 成功后才失效该节点的 IP 缓存并触发已有探测链路。凭据不经过浏览器响应和日志。生产启用须额外授权。
+确认后解析目标 DNS，拒绝回环/私网/管理地址，将实际拨号地址固定为已校验公网 IP，保留 TLS SNI，避免 DNS 重绑定；这意味着受控出站不会自动跟随该域名后续 IP 变动，需要重新预览应用。候选配置不进行订阅下载。
 
-本版本只测试禁用门禁和离线解析，**没有实现或宣称通过隔离环境完整切换/恢复测试**。
+## 事务、生效与回滚
 
-## 组件来源与复用
+该版本没有经验证的无中断更新入口。上游 1.13.15 Clash PUT `/configs` 是空操作，SIGHUP 会关闭再创建实例。本实现明确使用固定 `systemctl restart sing-box.service`：全部现有连接会短暂断开并重连。界面预览和二次确认必须说明该风险。
 
-使用本项目已有卡片 Map、Canvas 图表所有者、WS 订阅、IPinfo 字段、节点权限、历史 API 和导航 DOM。统一 `UI.bind/modal/confirm/password/notify/copy` 管理原生 dialog 生命周期、焦点返回、滚动锁、关闭动画与顶层 Toast；菜单和表单不建立第二套监听/轮询链路。
+1. 单实例锁及跨进程 flock；候选计划绑定配置哈希，写入前再次 CAS；不覆盖外部并发变更。
+2. 保留原文件及 SHA-256，候选通过固定二进制 `sing-box check`，验证依赖与范围；在独立临时 sing-box/SOCKS 实例检查新出口。
+3. 先持久化恢复事务，再 fsync+原子替换；固定 systemd restart 生效，检查服务、所有 TCP 入站监听及目标真实入站连通性。
+4. 失败恢复原文件、重启并验证服务；快照持久化失败同样回滚。中断事务由控制器下次启动恢复；若检测到外部配置冲突则停止并保留备份，不能盲目覆盖。
+5. 保存最小恢复快照和脱敏审计；审计轮换限制为两份约 4 MiB。原配置备份保留，不自动清理用户回滚资料。成功出口证明绑定准确配置哈希；更换/恢复或依赖变化不能复用旧路径的验证缓存。
 
-开发时只读研究已有成熟组件的单层材质、22px 表面圆角、24×24 图标、弹簧曲线、顶层通知和焦点生命周期模式；本仓库实现为独立适配，不含私有媒体业务源码、SVG 资源文件或业务资源。sbbot 解析器与其配置/机器人业务耦合，未提取或复制；本项目 Adapter 使用独立实现和公开规范，并用自行编写的同类 URI 样例核对子集行为，不声称全量兼容。
+仅经过路径验证的 Shadowsocks 或 TCP REALITY VLESS 入站允许写入。`write_enabled` 默认为 false；操作者完成隔离验证和明确授权后才能启用。配置控制器不与第三方工具共享写锁；外部编辑在哈希检查中冲突会被拒绝，操作者仍应避免同时在其他工具中编辑。不能保证跨独立、不配合锁的写入者实现全局事务。
+
+根配置示意（只存在宿主机，不能提交真实配置）：
+
+```json
+{"config":"/etc/sing-box/config.json","state":"/var/lib/tzsingbox-control","socket":"/run/tzsingbox-control/control.sock","binary":"/usr/local/bin/sing-box","unit":"sing-box.service","peer_uid":65532,"peer_gid":65532,"write_enabled":false,"exit_file":"/var/lib/tzsingbox-inventory/applied-exits.json","endpoints":{"public-inbound":{"host":"node.example.org","port":443,"verified":true}}}
+```
+
+Web 配置 `CONTROL_SOCKET` 并只挂载 socket 所在目录，不挂载 root 配置/备份；`CONTROL_SERVER` 必须对应登记的服务器 ID。未配置控制器时保留安全的离线预览，生产写入和凭据导出仍硬拒绝。
+
+## 复用和验证
+
+复用既有 UI dialog、Toast、SVG、卡片 Map、图表、WS、会话、权限、历史与别名入口。成熟玻璃组件仅用于只读设计参考，未复制私有业务源码。URI Adapter 独立实现，不复制 sbbot 源码。
+
+定向 Go 测试覆盖共享 direct 的多入站身份/差分、selector/URLTest/多级依赖、未知规则、历史和缓存兼容、权限/CSRF/重放/凭据边界、真实配置恢复、校验失败和自动回滚。显式设置 `TZSING_TEST_SINGBOX=/usr/local/bin/sing-box` 才运行独立合成实例切换测试，不调用生产 systemd 或读取生产数据库。

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS epochs(server TEXT NOT NULL,epoch TEXT NOT NULL,at IN
 CREATE TABLE IF NOT EXISTS counters(server TEXT NOT NULL,tag TEXT NOT NULL,epoch TEXT NOT NULL,rawup INTEGER NOT NULL,rawdown INTEGER NOT NULL,totalup INTEGER NOT NULL,totaldown INTEGER NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(server,tag));
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
 INSERT OR IGNORE INTO settings VALUES('sample_seconds',2),('retention_days',30),('show_raw_tag',0),('show_expiry',0),('show_quota',1);
+CREATE TABLE IF NOT EXISTS control_permissions(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,action TEXT NOT NULL CHECK(action IN ('change','restore','copy','import_shadowrocket','import_v2rayn','view')),PRIMARY KEY(user_id,action));
 CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 INSERT OR IGNORE INTO preferences VALUES('default_node_name','节点');
 CREATE TABLE IF NOT EXISTS nodes(id TEXT NOT NULL UNIQUE,server TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,tag TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',quota INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(server,tag));
@@ -168,7 +169,7 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 		tags := []model.Tag{}
 		for _, t := range report.Tags {
 			if s.Allowed(u, r.id, t.Name) {
-				if t.Egress != "" && !s.Allowed(u, r.id, t.Egress) {
+				if t.Identity != "inbound" && t.Egress != "" && !s.Allowed(u, r.id, t.Egress) {
 					t.Egress = ""
 					t.IP = nil
 				}

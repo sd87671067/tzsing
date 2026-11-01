@@ -4,6 +4,7 @@ Never writes, signals or restarts the production sing-box process.
 """
 import hashlib, json, os, pwd, signal, subprocess, time
 from pathlib import Path
+from inbound_inventory import inbound_inventory
 
 CONFIG = Path(os.environ.get('SINGBOX_CONFIG', '/etc/sing-box/config.json'))
 STATE = Path(os.environ.get('TZSINGBOX_CONFIG_DIR', '/etc/tzsingbox'))
@@ -38,8 +39,8 @@ def inventory(config, verified):
             if link not in roots:
                 roots.add(link)
                 pending.append(link)
-    return {'routes_verified': verified, 'outbounds': [
-        {'tag': o['tag'], 'type': o['type'], 'bound': o['tag'] in roots}
+    return {'config_hash': hashlib.sha256(json.dumps(config,sort_keys=True,separators=(',',':')).encode()).hexdigest(), 'inbounds': inbound_inventory(config), 'routes_verified': verified, 'outbounds': [
+        {'tag': o['tag'], 'type': o['type'], 'bound': o['tag'] in roots, 'members': o.get('outbounds', []), 'detour': o.get('detour', '')}
         for o in outbounds if o.get('tag') and o.get('type')
     ]}
 
@@ -86,9 +87,18 @@ def main():
             raw = CONFIG.read_bytes()
             digest = hashlib.sha256(raw).hexdigest()
             valid = digest == expected
-            if digest != previous:
-                write_inventory(inventory(json.loads(raw), valid))
-                previous = digest
+            receipt_path=INVENTORY.parent / 'applied-exits.json'
+            receipt_raw=receipt_path.read_bytes() if receipt_path.exists() else b''
+            inventory_version=(digest,hashlib.sha256(receipt_raw).hexdigest())
+            if inventory_version != previous:
+                data=inventory(json.loads(raw), valid)
+                data['config_hash']=digest
+                try:
+                    receipt=json.loads((INVENTORY.parent / 'applied-exits.json').read_text())
+                    if receipt.get('config_hash')==digest: data['applied_exit']=receipt
+                except (OSError,ValueError): pass
+                write_inventory(data)
+                previous = inventory_version
             if not valid:
                 stop_child()
             elif child is None or child.poll() is not None:

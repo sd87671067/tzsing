@@ -19,6 +19,20 @@ func OutboundType(protocol string) (kind, category string) {
 }
 func (t *Tag) Classify() {
 	// Legacy reports without protocol metadata remain unavailable, never guessed.
+	if t.Identity == "inbound" {
+		t.Kind = "actual"
+		_, t.Category = OutboundType(t.Type)
+		t.DisplayEligible = true
+		t.DisplayReason = "客户端入站"
+		t.Verification = "never"
+		if t.IP != nil && t.IP.Verified && t.IP.Updated > 0 && (t.IP.IPv4 != "" || t.IP.IPv6 != "") {
+			t.Verification = "verified"
+			if t.IP.Error != "" {
+				t.Verification = "stale"
+			}
+		}
+		return
+	}
 	t.Kind, t.Category = OutboundType(t.Type)
 	t.DisplayEligible = false
 	t.Verification = "never"

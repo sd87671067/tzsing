@@ -5,19 +5,39 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 	"tzsingbox/internal/model"
 )
 
 // Inventory contains protocol identities only, never outbound credentials.
 // A privileged, read-only exporter writes this file atomically on config change.
+type AppliedExit struct {
+	ConfigHash string `json:"config_hash"`
+	Tag        string `json:"tag"`
+	Outbound   string `json:"outbound"`
+	IP         string `json:"ip"`
+	At         int64  `json:"at"`
+}
 type Inventory struct {
+	AppliedExit *AppliedExit `json:"applied_exit"`
+	ConfigHash  string       `json:"config_hash"`
+
+	Inbounds       []Inbound  `json:"inbounds"`
 	Outbounds      []Outbound `json:"outbounds"`
 	RoutesVerified bool       `json:"routes_verified"`
 }
+type Inbound struct {
+	Tag     string   `json:"tag"`
+	Type    string   `json:"type"`
+	Routes  []string `json:"routes"`
+	Unknown bool     `json:"unknown"`
+}
 type Outbound struct {
-	Tag   string `json:"tag"`
-	Type  string `json:"type"`
-	Bound bool   `json:"bound"`
+	Members []string `json:"members"`
+	Detour  string   `json:"detour"`
+	Tag     string   `json:"tag"`
+	Type    string   `json:"type"`
+	Bound   bool     `json:"bound"`
 }
 
 func ReadInventory(path string) (*Inventory, error) {
@@ -28,6 +48,16 @@ func ReadInventory(path string) (*Inventory, error) {
 	var v Inventory
 	if len(b) > 256<<10 || json.Unmarshal(b, &v) != nil || len(v.Outbounds) > 512 {
 		return nil, fmt.Errorf("invalid outbound inventory")
+	}
+	seenIn := map[string]bool{}
+	if len(v.Inbounds) > 512 {
+		return nil, fmt.Errorf("invalid inbound inventory")
+	}
+	for _, i := range v.Inbounds {
+		if i.Tag == "" || len(i.Tag) > 128 || seenIn[i.Tag] || len(i.Routes) > 512 {
+			return nil, fmt.Errorf("invalid inbound identity")
+		}
+		seenIn[i.Tag] = true
 	}
 	seen := map[string]bool{}
 	for _, o := range v.Outbounds {
@@ -44,6 +74,9 @@ func (c *Clash) SetInventory(v *Inventory) { c.inventory = v }
 func (c *Clash) UnavailableTags() []model.Tag {
 	if c.inventory == nil {
 		return nil
+	}
+	if c.inventory.Inbounds != nil {
+		return c.inboundTags(nil, nil, time.Now())
 	}
 	tags := []model.Tag{}
 	for tag, p := range c.discovered(nil) {
@@ -68,4 +101,15 @@ func (c *Clash) discovered(api map[string]Proxy) map[string]Proxy {
 		out[o.Tag] = p
 	}
 	return out
+}
+
+func (c *Clash) InvalidateInventory() {
+	if c.inventory == nil {
+		return
+	}
+	c.inventory.ConfigHash = "unavailable"
+	for i := range c.inventory.Inbounds {
+		c.inventory.Inbounds[i].Unknown = true
+		c.inventory.Inbounds[i].Routes = nil
+	}
 }

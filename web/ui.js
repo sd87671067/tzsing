@@ -4,8 +4,8 @@
 // business implementation or resources are included here.
 const UI=(()=>{
  const make=(tag,cls,value)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(value!==undefined)e.textContent=value;return e};
- const paths={more:'M5 12h.01M12 12h.01M19 12h.01',close:'m6 6 12 12M18 6 6 18',copy:'M8 8h13v13H8zM16 8V3H3v13h5',import:'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',change:'M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4',restore:'M4 10a8 8 0 1 1 1 8M4 4v6h6'};
- function icon(name){const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('viewBox','0 0 24 24');s.setAttribute('class','icon');s.setAttribute('aria-hidden','true');const p=document.createElementNS(s.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.close);s.append(p);return s}
+ const paths={sun:'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5',moon:'M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11',more:'M5 12h.01M12 12h.01M19 12h.01',close:'m6 6 12 12M18 6 6 18',copy:'M8 8h13v13H8zM16 8V3H3v13h5',import:'M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4',change:'M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4',restore:'M4 10a8 8 0 1 1 1 8M4 4v6h6'};
+ function icon(name){const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('viewBox','0 0 24 24');s.setAttribute('width','24');s.setAttribute('height','24');s.setAttribute('class','icon');s.setAttribute('aria-hidden','true');const p=document.createElementNS(s.namespaceURI,'path');p.setAttribute('d',paths[name]||paths.close);s.append(p);return s}
  function button(label,name,action){const b=make('button','icon-button');b.type='button';b.setAttribute('aria-label',label);b.title=label;b.append(icon(name));if(action)b.onclick=action;return b}
  const open=[],queue=[];let toast=null,toastTimer=null;
  const stack=make('div','toast-stack');stack.setAttribute('aria-live','polite');stack.setAttribute('popover','manual');
@@ -32,7 +32,11 @@ const UI=(()=>{
  function modal(title,content,{trigger,dirty,onClose,variant='modal'}={}){const d=make('dialog',variant),heading=make('div','title-row'),h=make('h2','',title),x=button('关闭','close');h.id='dialog-title-'+(++modal.id);d.setAttribute('aria-labelledby',h.id);heading.append(h,x);d.append(heading,content);document.body.append(d);const life=bind(d,{trigger,dirty,onClose,dispose:true});x.onclick=()=>life.close();life.show();return life}modal.id=0;
  function confirm(title,description){return new Promise(resolve=>{let result=false;const body=make('div','confirm-content'),actions=make('div','row-actions'),no=make('button','','取消'),yes=make('button','danger','确认');body.append(make('p','',description),actions);actions.append(no,yes);const m=modal(title,body,{onClose:()=>resolve(result)});no.onclick=()=>m.close(true);yes.onclick=()=>{result=true;m.close(true)}})}
  function password(title){return new Promise(resolve=>{let value=null;const f=make('form'),l=make('label','','新密码（任意非空 Unicode，空格保留）'),p=make('input'),b=make('button','primary','确认');p.type='password';p.required=true;p.autocomplete='new-password';l.append(p);f.append(l,b);const m=modal(title,f,{dirty:()=>p.value!==''&&value===null,onClose:()=>{resolve(value);p.value=''}});f.onsubmit=e=>{e.preventDefault();value=p.value;m.close(true)};p.focus()})}
- async function copy(value){try{await navigator.clipboard.writeText(value);notify('已复制 IP 地址')}catch{const body=make('div'),input=make('input');input.readOnly=true;input.value=value;body.append(make('p','','剪贴板不可用，请长按或选择后手动复制。'),input);modal('手动复制',body);input.focus();input.select()}}
+ async function copy(value,{sensitive=false}={}){try{await navigator.clipboard.writeText(value);notify('复制成功')}catch{if(sensitive){notify('剪贴板不可用，请在安全浏览器中重试','error');return false}const body=make('div'),input=make('input');input.readOnly=true;input.value=value;body.append(make('p','','剪贴板不可用，请长按或选择后手动复制。'),input);modal('手动复制',body);input.focus();input.select();return false}return true}
+ async function copyRequested(supplier){
+  if(!navigator.clipboard){notify('剪贴板不可用，请在安全浏览器中重试','error');return false}
+  try{if(window.ClipboardItem&&navigator.clipboard.write){const pending=Promise.resolve().then(supplier).then(value=>new Blob([value],{type:'text/plain'}));pending.catch(()=>{});await navigator.clipboard.write([new ClipboardItem({'text/plain':pending})])}else{await navigator.clipboard.writeText(await supplier())}notify('复制成功');return true}catch{notify('复制失败，请检查权限后重试','error');return false}
+ }
  function invalidate(){for(const e of [...open].reverse())e.force()}
- return {make,icon,button,bind,modal,confirm,password,copy,notify,invalidate};
+ return {make,icon,button,bind,modal,confirm,password,copy,copyRequested,notify,invalidate};
 })();
