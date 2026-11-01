@@ -33,23 +33,24 @@ function update(data){
   liveCards.add(s.id);let c=cards.get(s.id);
   if(!c){const el=node('section','card card--server'),title=node('h2'),status=node('span','pill'),head=node('div','server-head'),detail=node('p','server-detail');head.append(title,status);el.append(head,detail);$('#servers').append(el);c={el,title,status,detail};cards.set(s.id,c)}
   text(c.title,s.name);text(c.status,s.online?'在线':'离线');c.status.dataset.state=s.online?'online':'offline';
-  const h=s.report?.host;text(c.detail,h?'CPU '+(h.cpu?.toFixed(1)??NA)+'% · 内存 '+pct(h.memory_used,h.memory_total)+' · 磁盘 '+pct(h.disk_used,h.disk_total)+' · 主机 ↑ '+rate(h.net_up)+' ↓ '+rate(h.net_down)+' · 运行 '+Math.floor(h.uptime/3600)+'h · sing-box '+(h.sing_box?'运行中':'未检测到')+' · 负载 '+h.load:'最近心跳 '+when(s.seen));
+  const h=s.report?.host;text(c.detail,h?'CPU '+(h.cpu?.toFixed(1)??NA)+'% · 内存 '+pct(h.memory_used,h.memory_total)+' · 磁盘 '+pct(h.disk_used,h.disk_total)+' · 主机 ↑ '+rate(h.net_up)+' ↓ '+rate(h.net_down)+' · 运行 '+Math.floor(h.uptime/3600)+'h · sing-box '+(h.sing_box?'运行中':'未检测到')+' · 负载 '+h.load+(s.report.unattributed_connections?' · '+s.report.unattributed_connections+' 条连接无法归属，相关流量未知':''):'最近心跳 '+when(s.seen));
   for(const t of s.report?.tags||[]){
+   if(t.identity!=='inbound')continue;
    if(s.online&&t.kind==='actual'&&t.up!=null){up+=t.up;down+=t.down;available=true}
    if(!t.display_eligible)continue;
    suggestions.push(t.name);const key=t.id;liveRows.add(key);let r=rows.get(key);
    if(!r){
     const el=node('article','card card--node'),number=node('span','node-number'),spark=node('canvas','node-spark'),expiry=node('p','node-expiry'),summary=node('div','node-summary'),head=node('div','node-head'),name=node('h2'),category=node('span','pill category'),status=node('span','pill'),arrow=UI.button('节点操作','more'),raw=node('small','raw-tag'),flow=node('div','flow'),upload=node('strong'),download=node('strong'),quota=node('p','quota'),meter=node('progress'),ip=node('button','node-ip');
-    head.append(number,name,category,status,arrow);flow.append(upload,download);meter.max=1;spark.setAttribute('aria-hidden','true');summary.append(spark,head,raw,ip,flow,quota,meter,expiry);el.append(summary);$('#tags').append(el);r={el,number,spark,expiry,series:[],sample:null,summary,name,category,status,arrow,raw,upload,download,quota,meter,ip};rows.set(key,r);
+    head.append(number,name,category,status,arrow);flow.append(upload,download);meter.max=1;spark.setAttribute('aria-hidden','true');summary.append(spark,head,raw,ip,flow,quota,meter,expiry);el.append(summary);el.tabIndex=0;el.setAttribute('aria-haspopup','dialog');el.onclick=e=>{if(!e.target.closest('button'))showHistory(key)};el.onkeydown=e=>{if(e.target===el&&['Enter',' '].includes(e.key)){e.preventDefault();showHistory(key)}};$('#tags').append(el);r={el,number,spark,expiry,series:[],sample:null,summary,name,category,status,arrow,raw,upload,download,quota,meter,ip};rows.set(key,r);
     ip.type='button';ip.setAttribute('aria-haspopup','dialog');ip.onclick=e=>{e.stopPropagation();showHistory(key)};arrow.setAttribute('aria-haspopup','dialog');arrow.onclick=e=>{e.stopPropagation();NodeControl.show(key,arrow)};
    }
-   if(r.sample!==s.report.at){r.sample=s.report.at;r.series.push([s.report.at,t.up||0,t.down||0]);if(r.series.length>180)r.series.splice(0,r.series.length-180);Charts.set(r.spark,r.series,'area',true)}
+   if(r.sample!==s.report.at){r.sample=s.report.at;if(t.up!=null&&t.down!=null)r.series.push([s.report.at,t.up,t.down]);if(r.series.length>180)r.series.splice(0,r.series.length-180);Charts.set(r.spark,r.series,'area',true)}
    r.t=t;r.s=s;r.el.hidden=Boolean((filter&&filter!==s.id)||(query&&!t.name.toLocaleLowerCase().includes(query)));
-   r.arrow.hidden=me?.role!=='admin';text(r.name,t.name);r.name.title=t.name;text(r.category,t.category);text(r.status,s.online?(t.state==='unknown'?'状态未知':'在线'):'离线');r.status.dataset.state=s.online&&t.state!=='unknown'?'online':'offline';
+   r.arrow.hidden=me?.role!=='admin';text(r.name,t.name);r.name.title=t.name;text(r.category,protocolName(t.type));r.category.title=t.category;text(r.status,s.online?(t.state==='unknown'?'状态未知':'在线'):'离线');r.status.dataset.state=s.online&&t.state!=='unknown'?'online':'offline';
    text(r.raw,t.raw_tag?'Tag · '+t.raw_tag:'');r.raw.hidden=!t.raw_tag;
    smoothRate(r.upload,t.up,'↑ ');smoothRate(r.download,t.down,'↓ ');
    text(r.quota,'本月 '+bytes(t.month_used)+(t.quota?' / '+bytes(t.quota)+' · '+pct(t.month_used,t.quota):''));r.meter.value=t.quota&&t.month_used!=null?Math.min(1,t.month_used/t.quota):0;r.meter.hidden=!t.quota;r.meter.setAttribute('aria-label','月额度使用比例');
-   const ipLabel=[countryName(t.ip),t.ip?.ipv4||t.ip?.ipv6,t.ip&&(t.verification==='stale'?'缓存 · 待验证':'已验证')].filter(Boolean).join(' · ');text(r.ip,ipLabel||'查看 IP 与流量详情');r.ip.hidden=false;
+   const ipLabel=[t.category,countryName(t.ip),t.ip?.ipv4||t.ip?.ipv6,t.ip&&(t.verification==='stale'?'缓存 · 待验证':'已验证')].filter(Boolean).join(' · ');text(r.ip,ipLabel||'查看 IP 与流量详情');r.ip.hidden=false;
    text(r.expiry,t.expires_at?'到期 '+new Date(t.expires_at*1000).toLocaleDateString('zh-CN'):'');r.expiry.hidden=!t.expires_at;
    r.meter.dataset.warning=t.quota&&t.month_used/t.quota*100>=(t.alert_threshold||80)?'true':'false';
 
@@ -63,7 +64,7 @@ function update(data){
  if(options.join()!==data.map(s=>s.id).join()){const sel=$('#server-filter');sel.replaceChildren(new Option('全部服务器',''));data.forEach(s=>sel.add(new Option(s.name,s.id)));sel.value=filter}
  const names=[...new Set(suggestions)];if($('#node-suggestions').textContent!==names.join('')){$('#node-suggestions').replaceChildren(...names.map(n=>{const o=node('option','',n);o.value=n;return o}))}
 
- if(selectedHistory){const r=rows.get(selectedHistory.node_id);if(!r&&!selectedHistory.archive){closeDetails()}else if(r){renderDetails(r);if(chartRange==='live')drawChart($('#history-chart'),r.series,chartType)}}
+ if(selectedHistory){const r=rows.get(selectedHistory.node_id);if(!r){closeDetails()}else if(r){renderDetails(r);if(chartRange==='live')drawChart($('#history-chart'),r.series,chartType)}}
  if(available&&Date.now()-lastPoint>=900){points.push([Date.now()/1000,up,down]);if(points.length>120)points.shift();lastPoint=Date.now();drawChart($('#chart'),points)}
 }
 $('#node-search').oninput=()=>update(views);
@@ -73,7 +74,7 @@ function sortNodes(){
  const mode=$('#node-sort').value,items=[...rows.values()];
  if(mode!=='default')items.sort((a,b)=>mode==='name'?a.t.name.localeCompare(b.t.name,'zh-CN'):mode==='speed'?((b.t.up||0)+(b.t.down||0))-((a.t.up||0)+(a.t.down||0)):(b.t.month_used||0)-(a.t.month_used||0));
  const parent=$('#tags');let i=0;for(const r of items){if(parent.children[i]!==r.el)parent.insertBefore(r.el,parent.children[i]||null);i++}
- let n=0;for(const r of items)if(!r.el.hidden){text(r.number,String(++n).padStart(2,'0'));r.ip.setAttribute('aria-label',r.t.name+'，查看 IP 与流量详情')}
+ let n=0;for(const r of items)if(!r.el.hidden){text(r.number,String(++n).padStart(2,'0'));r.ip.setAttribute('aria-label',r.t.name+'，查看 IP 与流量详情');r.el.setAttribute('aria-label',r.t.name+' · '+protocolName(r.t.type)+'，查看 IP 信息')}
 }
 $('#node-sort').onchange=sortNodes;
 function countryName(ip){if(!ip)return '';try{return ip.country_code?new Intl.DisplayNames(['zh-CN'],{type:'region'}).of(ip.country_code):ip.country||''}catch{return ip.country||''}}
@@ -82,34 +83,25 @@ function smoothRate(el,value,sign){
  if(value==null||Charts.reduced||document.hidden||el.closest('.card--node')?.getBoundingClientRect().top>innerHeight){text(el,sign+rate(value));el.current=value;return}
  const from=el.current??value,start=performance.now();const tick=now=>{if(document.hidden){el.current=value;text(el,sign+rate(value));return}const p=Math.min(1,(now-start)/240);el.current=from+(value-from)*p;text(el,sign+rate(el.current));if(p<1)el.frame=requestAnimationFrame(tick)};el.frame=requestAnimationFrame(tick);
 }
-const protocolName=t=>({Direct:'直接连接',SOCKS:'SOCKS 代理',HTTP:'HTTP 代理',Reject:'拒绝连接',Selector:'出口选择器',URLTest:'自动测速选择器'}[t]||t);
+const protocolName=t=>({vless:'VLESS',vmess:'VMess',trojan:'Trojan',socks:'SOCKS',mixed:'SOCKS / HTTP',http:'HTTP',shadowsocks:'Shadowsocks',hysteria:'Hysteria',hysteria2:'Hysteria 2',tuic:'TUIC',tun:'TUN',direct:'Direct'}[t?.toLowerCase()]||t||'协议未提供');
 function renderDetails(r){
- const t=r.t,ip=t.ip;text($('#history-title'),t.name+' · 流量与出口详情');text($('#detail-raw'),t.raw_tag?'Tag · '+t.raw_tag:'');$('#detail-raw').hidden=!t.raw_tag;
+ const t=r.t;text($('#history-title'),t.name+' · IP 信息');text($('#detail-raw'),t.raw_tag?'Tag · '+t.raw_tag:'');$('#detail-raw').hidden=!t.raw_tag;
  text($('#detail-status'),r.s.name+' · '+t.category+' · '+protocolName(t.type)+' · 当前连接 '+(t.active??NA)+(t.identity==='inbound'?' · '+(t.egress?'出站 '+t.egress:t.route_reason||'出口未知'):''));
  text($('#detail-flow'),'实时 ↑ '+rate(t.up)+' / ↓ '+rate(t.down));
  const totals=[['今日',t.today_upload,t.today_download],['本月',t.month_upload,t.month_download],['累计',t.upload,t.download]];
- const group=$('#detail-totals');for(let i=0;i<totals.length;i++){let cell=group.children[i];if(!cell){cell=node('div','stat-cell');cell.append(node('span'),node('strong'),node('small'));group.append(cell)}text(cell.children[0],totals[i][0]);text(cell.children[1],bytes((totals[i][1]||0)+(totals[i][2]||0)));text(cell.children[2],'↑ '+bytes(totals[i][1])+' · ↓ '+bytes(totals[i][2]))}
+ const group=$('#detail-totals');for(let i=0;i<totals.length;i++){let cell=group.children[i];if(!cell){cell=node('div','stat-cell');cell.append(node('span'),node('strong'),node('small'));group.append(cell)}text(cell.children[0],totals[i][0]);text(cell.children[1],bytes(totals[i][1]==null||totals[i][2]==null?null:totals[i][1]+totals[i][2]));text(cell.children[2],'↑ '+bytes(totals[i][1])+' · ↓ '+bytes(totals[i][2]))}
  text($('#detail-quota'),t.quota?'本账期 '+bytes(t.month_used)+' / '+bytes(t.quota)+' · 剩余 '+bytes(Math.max(0,t.quota-(t.month_used||0)))+' · 每月 '+t.billing_day+' 日 / '+t.timezone:'');$('#detail-quota').hidden=!t.quota;
  text($('#detail-expiry'),t.expires_at?'到期时间 '+when(t.expires_at)+'（仅提醒）':'');$('#detail-expiry').hidden=!t.expires_at;
- const hasIP=Boolean(ip?.verified&&(ip.ipv4||ip.ipv6));$('#ip-section').hidden=!hasIP;
- const cityNames={'Bangkok':'曼谷','Kuala Lumpur':'吉隆坡','Manila':'马尼拉','Sao Paulo':'圣保罗','São Paulo':'圣保罗','Hong Kong':'香港','Tokyo':'东京','Singapore':'新加坡','Los Angeles':'洛杉矶','Taipei':'台北','Seoul':'首尔','Osaka':'大阪','San Jose':'圣何塞','London':'伦敦','Frankfurt am Main':'法兰克福'};
- const fields=hasIP?[
- ['IPv4',ip.ipv4],['IPv6',ip.ipv6],['国家 / 地区',countryName(ip)],['城市',cityNames[ip.city]||ip.city],['ASN',ip.asn],['运营商',ip.org],
- ['IP 类型',ip.ip_type],['元数据状态',ip.metadata_at?(ip.metadata_cached?'缓存 · ':'')+when(ip.metadata_at):''],
- ['IP 属性',ip.residential===true?'住宅':ip.datacenter===true?'机房':ip.residential===false?'非住宅（来源未判定是否机房）':''],
- ['风险评分',ip.risk_score!=null?ip.risk_score+' / 100 · 越高风险越高，非安全保证':''],['质量对应 IP',ip.quality_ip],['质量来源',ip.quality_source],['质量检测时间',ip.quality_at?when(ip.quality_at):''],
- ['可信状态',t.verification==='stale'?'缓存 · 上次成功的出口':'已通过实际路径验证'],['成功检测时间',ip.updated?when(ip.updated):''],['出口来源',ip.source],['归属来源',ip.geo_source]
- ].filter(f=>f[1]):[];
- const dl=$('#detail-ip');while(dl.children.length>fields.length*2)dl.lastChild.remove();for(let i=0;i<fields.length;i++){if(!dl.children[i*2])dl.append(node('dt'),node('dd'));text(dl.children[i*2],fields[i][0]);const cell=dl.children[i*2+1];if(fields[i][0]==='IPv4'||fields[i][0]==='IPv6'){let b=cell.querySelector('button'),label=cell.querySelector('span');if(!b){cell.replaceChildren();label=node('span');b=UI.button('复制 IP 地址','copy');b.classList.add('copy-ip');cell.append(label,b)}text(label,fields[i][1]);b.onclick=e=>{e.preventDefault();e.stopPropagation();UI.copy(fields[i][1])}}else text(cell,fields[i][1])}
+ $('#ip-section').hidden=false;
+ NodeInspect.render(r);
  $('#detail-admin').hidden=me?.role!=='admin';
 }
-const historyLife=UI.bind($('#history-panel'),{dirty:()=>$('#alias-form').elements.name.value!=='',onClose:()=>{selectedHistory=null;historyRows=[];historyRequest++;drawChart($('#history-chart'),[]);$('#alias-form').reset()}});
-function placeDetails(){}
+const historyLife=UI.bind($('#history-panel'),{dirty:()=>$('#alias-form').elements.name.value!=='',onClose:()=>{selectedHistory=null;NodeInspect.close();historyRows=[];historyRequest++;drawChart($('#history-chart'),[]);$('#alias-form').reset()}});
 function closeDetails(){historyLife.force()}
 $('#close-details').onclick=()=>historyLife.close();
 async function showHistory(id){
  const r=rows.get(id);if(!r)return;
- selectedHistory={node_id:id};renderDetails(r);$('#alias-form').reset();historyLife.show(r.ip);
+ selectedHistory={node_id:id};renderDetails(r);$('#alias-form').reset();NodeInspect.open(id);historyLife.show(document.activeElement?.closest('.card--node')||r.el);
  $('#chart-range').value=chartRange;await loadHistory();
 }
 async function loadHistory(){
@@ -142,7 +134,7 @@ $('#user-form').onsubmit=e=>{e.preventDefault();const v=Object.fromEntries(new F
 $('#grants-form').onsubmit=async e=>{e.preventDefault();const save=$('#grant-save');save.disabled=true;try{await api('admin/grants','PUT',permissionPicker.payload($('#grant-user').value));message('权限已保存，现有订阅已更新');await loadAdmin();text($('#grant-status'),'权限已保存')}catch(err){message(err.message)}finally{save.disabled=false}};
 $('#server-form').onsubmit=e=>{e.preventDefault();action(async()=>{const v=await api('admin/servers','POST',Object.fromEntries(new FormData(e.target)));text($('#server-token'),'ID '+v.id+' · Token '+v.token);e.target.reset()})};
 $('#settings-form').onsubmit=e=>{e.preventDefault();const v=Object.fromEntries(new FormData(e.target));action(()=>api('admin/settings','PUT',{sample_seconds:Number(v.sample_seconds),retention_days:Number(v.retention_days),show_raw_tag:e.target.elements.show_raw_tag.checked,show_expiry:e.target.elements.show_expiry.checked,show_quota:e.target.elements.show_quota.checked,default_node_name:v.default_node_name}))};
-let resize;window.addEventListener('resize',()=>{clearTimeout(resize);resize=setTimeout(()=>{placeDetails();Charts.invalidate()},180)});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&views.length)update(views)});api('me').then(signedIn).catch(()=>{});
+let resize;window.addEventListener('resize',()=>{clearTimeout(resize);resize=setTimeout(()=>{Charts.invalidate()},180)});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&views.length)update(views)});api('me').then(signedIn).catch(()=>{});
 
 async function loadNodeAdmin(){
  const data=await api('admin/nodes');$('#node-admin-list').replaceChildren();let missing=0;
@@ -152,7 +144,6 @@ async function loadNodeAdmin(){
   if(t.ip?.error||t.ip?.quality_error){const d=node('p','muted','探针诊断：'+[t.ip.error,t.ip.quality_error].filter(Boolean).join(' · '));f.insertBefore(d,save)}
   f.onsubmit=e=>{e.preventDefault();action(()=>api('admin/nodes','PUT',{node_id:t.id,name:name.value,quota:Math.round(Number(quota.value)*1073741824),expires_at:extra.expires_at.value?Math.floor(new Date(extra.expires_at.value).getTime()/1000):0,billing_day:Number(extra.billing_day.value),timezone:extra.timezone.value.trim(),alert_threshold:Number(extra.alert_threshold.value)}))};$('#node-admin-list').append(f)
  }
- const archives=await api('archives');$('#node-archives').replaceChildren();for(const old of archives){const b=node('button','',old.name+(old.raw_tag?' · '+old.raw_tag:'')+' · '+bytes(old.upload+old.download));b.onclick=async()=>{selectedHistory={node_id:old.id,archive:true};$('#alias-form').reset();renderDetails({t:{...old,type:'历史出站',category:'已归档',state:'offline',billing_day:1,timezone:'UTC',verification:'never'},s:{name:'历史档案'}});historyLife.show(b);chartRange='24h';$('#chart-range').value=chartRange;await loadHistory()};$('#node-archives').append(b)}
  text($('#name-warning'),missing?'有 '+missing+' 个节点尚未设置全局名称，当前使用友好默认名；请补充中文名称。':'所有节点均已设置全局名称。');
 }
 

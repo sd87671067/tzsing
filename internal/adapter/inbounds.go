@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 		known[in.Type+"/"+in.Tag] = "inbound:" + in.Tag
 	}
 	if snap != nil {
+		c.unattributed = 0
 		for _, x := range snap.Connections {
 			tag, ok := known[x.Metadata.Type]
 			if x.ID == "" || x.Upload < 0 || x.Download < 0 {
@@ -64,6 +66,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			}
 			next[x.ID] = x
 			if !ok {
+				c.unattributed++
 				continue
 			}
 			active[tag]++
@@ -85,7 +88,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 	}
 	tags := []model.Tag{}
 	for _, in := range c.inventory.Inbounds {
-		t := model.Tag{Name: "inbound:" + in.Tag, InboundTag: in.Tag, Identity: "inbound", RouteVersion: c.inventory.ConfigHash, State: "unknown", RouteReason: "未知：按用户、目标或规则集分流，无法确定唯一出口"}
+		t := model.Tag{Name: "inbound:" + in.Tag, InboundTag: in.Tag, Identity: "inbound", Type: in.Type, RouteVersion: c.inventory.ConfigHash, State: "unknown", RouteReason: "未知：按用户、目标或规则集分流，无法确定唯一出口"}
 		resolved := ""
 		unknown := in.Unknown || len(in.Routes) == 0
 		for _, root := range in.Routes {
@@ -100,7 +103,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			t.RouteReason = "配置路由与运行时选择器"
 			for _, o := range c.inventory.Outbounds {
 				if o.Tag == resolved {
-					t.Type = o.Type
+					t.EgressType = o.Type
 				}
 			}
 		}
@@ -129,4 +132,21 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 	}
 	sort.Slice(tags, func(i, j int) bool { return strings.Compare(tags[i].Name, tags[j].Name) < 0 })
 	return tags
+}
+
+// InboundPath resolves only the configured inbound and current selector choices.
+// It never probes the network or substitutes the host default route.
+func (c *Clash) InboundPath(tag string) (model.Tag, error) {
+	var p struct {
+		Proxies map[string]Proxy `json:"proxies"`
+	}
+	if err := c.get("/proxies", &p); err != nil {
+		return model.Tag{}, err
+	}
+	for _, t := range c.inboundTags(p.Proxies, nil, time.Now()) {
+		if t.InboundTag == tag {
+			return t, nil
+		}
+	}
+	return model.Tag{}, fmt.Errorf("inbound unavailable")
 }

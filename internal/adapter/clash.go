@@ -27,13 +27,14 @@ type Proxy struct {
 }
 type count struct{ up, down int64 }
 type Clash struct {
-	URL, Secret string
-	Client      *http.Client
-	previous    map[string]Connection
-	totals      map[string]count
-	last        time.Time
-	started     bool
-	inventory   *Inventory
+	unattributed int
+	URL, Secret  string
+	Client       *http.Client
+	previous     map[string]Connection
+	totals       map[string]count
+	last         time.Time
+	started      bool
+	inventory    *Inventory
 }
 
 func New(url, secret string) *Clash {
@@ -143,3 +144,6 @@ func (c *Clash) Collect() ([]model.Tag, error) {
 	c.started = true
 	return out, nil
 }
+
+// UnattributedConnections never assigns unmatched snapshot traffic to an inbound.
+func (c *Clash) UnattributedConnections() int { return c.unattributed }

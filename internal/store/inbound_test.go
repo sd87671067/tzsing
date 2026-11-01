@@ -77,3 +77,26 @@ func TestInboundExitCacheMustMatchCurrentMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestInboundInventoryExcludesMixedLegacyCounters(t *testing.T) {
+	s, e := Open(filepath.Join(t.TempDir(), "test.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	s.Exec("INSERT INTO servers(id,name,token) VALUES('s','test','fixture')")
+	report := model.Report{Tags: []model.Tag{{Name: "inbound:a", InboundTag: "a", Identity: "inbound", Type: "vless", Egress: "direct", EgressType: "direct"}, {Name: "direct", Type: "direct", Egress: "direct"}}, At: time.Now().Unix()}
+	b, _ := json.Marshal(report)
+	s.Exec("UPDATE servers SET report=?,seen=?", b, time.Now().Unix())
+	s.Exec("INSERT INTO counters VALUES('s','direct','e',999,999,999,999,1)")
+	for _, management := range []bool{false, true} {
+		views, e := s.views(User{Role: "admin"}, management)
+		if e != nil || len(views) != 1 || len(views[0].Report.Tags) != 1 {
+			t.Fatal("legacy measurement leaked", e, views)
+		}
+		tag := views[0].Report.Tags[0]
+		if tag.Type != "vless" || tag.Upload != nil && *tag.Upload != 0 {
+			t.Fatal("legacy measurement attributed", tag)
+		}
+	}
+}

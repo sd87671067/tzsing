@@ -167,7 +167,14 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 			}
 		}
 		tags := []model.Tag{}
+		inboundInventory := false
 		for _, t := range report.Tags {
+			inboundInventory = inboundInventory || t.Identity == "inbound"
+		}
+		for _, t := range report.Tags {
+			if inboundInventory && t.Identity != "inbound" {
+				continue
+			}
 			if s.Allowed(u, r.id, t.Name) {
 				if t.Identity != "inbound" && t.Egress != "" && !s.Allowed(u, r.id, t.Egress) {
 					t.Egress = ""
@@ -205,6 +212,9 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 			}
 		}
 		for _, logical := range report.Tags {
+			if inboundInventory {
+				break
+			}
 			kind, _ := model.OutboundType(logical.Type)
 			if kind != "logical" || logical.Egress == "" || !s.Allowed(u, r.id, logical.Name) || !s.Allowed(u, r.id, logical.Egress) {
 				continue
@@ -230,6 +240,7 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 			report.Epoch = ""
 		}
 		if !full {
+			report.UnattributedConnections = 0
 			report.Host = nil
 		}
 		online := r.enabled && r.seen > time.Now().Unix()-int64(max(10, report.Interval*4))

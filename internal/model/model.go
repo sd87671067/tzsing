@@ -1,6 +1,7 @@
 package model
 
 type Tag struct {
+	EgressType   string `json:"egress_type,omitempty"`
 	GrantTag     string `json:"grant_tag,omitempty"`
 	RouteVersion string `json:"route_version,omitempty"`
 	Identity     string `json:"identity,omitempty"`
@@ -85,14 +86,15 @@ type Host struct {
 	SingBox     bool     `json:"sing_box"`
 }
 type Report struct {
-	ServerID string `json:"server_id"`
-	Epoch    string `json:"epoch"`
-	Seq      int64  `json:"seq"`
-	At       int64  `json:"at"`
-	Interval int    `json:"interval"`
-	Host     *Host  `json:"host"`
-	Tags     []Tag  `json:"tags"`
-	Error    string `json:"error,omitempty"`
+	UnattributedConnections int    `json:"unattributed_connections,omitempty"`
+	ServerID                string `json:"server_id"`
+	Epoch                   string `json:"epoch"`
+	Seq                     int64  `json:"seq"`
+	At                      int64  `json:"at"`
+	Interval                int    `json:"interval"`
+	Host                    *Host  `json:"host"`
+	Tags                    []Tag  `json:"tags"`
+	Error                   string `json:"error,omitempty"`
 }
 type View struct {
 	ID     string  `json:"id"`

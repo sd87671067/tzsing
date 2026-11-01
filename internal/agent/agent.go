@@ -160,7 +160,7 @@ func Run(ctx context.Context, path string) error {
 				}
 			}
 		}
-		report := model.Report{ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}
+		report := model.Report{UnattributedConnections: clash.UnattributedConnections(), ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}
 		b, e = json.Marshal(report)
 		if e != nil {
 			return e

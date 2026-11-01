@@ -159,8 +159,8 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	if path == "/api/archives" && r.Method == "GET" {
-		a.archives(w, r, u)
+	if path == "/api/node-inspect" {
+		a.inspectNode(w, r, u)
 		return
 	}
 	if path == "/api/snapshot" && r.Method == "GET" {
@@ -383,6 +383,22 @@ func (a *App) history(w http.ResponseWriter, r *http.Request, u store.User) {
 	if !a.DB.Allowed(u, server, tag) {
 		fail(w, 403)
 		return
+	}
+	// Once an Agent supplies true inbound identities, retired outbound history
+	// is unavailable through the new monitoring/export API as well as the UI.
+	if !strings.HasPrefix(tag, "inbound:") {
+		var raw []byte
+		if a.DB.QueryRow("SELECT report FROM servers WHERE id=?", server).Scan(&raw) == nil {
+			var report model.Report
+			if json.Unmarshal(raw, &report) == nil {
+				for _, t := range report.Tags {
+					if t.Identity == "inbound" {
+						fail(w, 403)
+						return
+					}
+				}
+			}
+		}
 	}
 	duration, bucket := 24*time.Hour, int64(2)
 	switch r.URL.Query().Get("range") {

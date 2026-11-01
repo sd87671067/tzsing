@@ -19,6 +19,7 @@ import (
 )
 
 type ServiceConfig struct {
+	AgentConfig    string              `json:"agent_config,omitempty"`
 	Config         string              `json:"config"`
 	State          string              `json:"state"`
 	Socket         string              `json:"socket"`
@@ -39,11 +40,13 @@ type plan struct {
 	Expires   time.Time
 }
 type Controller struct {
-	lastIP string
-	Config ServiceConfig
-	mu     sync.Mutex
-	plans  map[string]plan
-	Hooks  *ApplyHooks
+	inspectLast  map[string]time.Time
+	inspectExits map[string]observedExit
+	lastIP       string
+	Config       ServiceConfig
+	mu           sync.Mutex
+	plans        map[string]plan
+	Hooks        *ApplyHooks
 }
 type ApplyHooks struct {
 	Check    func([]byte) error
@@ -52,11 +55,14 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
-	Tag     string `json:"tag"`
-	Link    string `json:"link"`
-	Plan    string `json:"plan"`
-	Profile string `json:"profile"`
-	Label   string `json:"label"`
+	Source       string `json:"source,omitempty"`
+	PreviousIPv4 string `json:"previous_ipv4,omitempty"`
+	PreviousIPv6 string `json:"previous_ipv6,omitempty"`
+	Tag          string `json:"tag"`
+	Link         string `json:"link"`
+	Plan         string `json:"plan"`
+	Profile      string `json:"profile"`
+	Label        string `json:"label"`
 }
 type transaction struct {
 	Hash     string              `json:"hash"`
@@ -324,6 +330,15 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var extra any
 	if d.Decode(&extra) != io.EOF {
 		fail(400, "请求无效")
+		return
+	}
+	if r.URL.Path == "/diagnostics" || r.URL.Path == "/intel" {
+		if !c.mu.TryLock() {
+			fail(429, "已有检测或配置操作进行中")
+			return
+		}
+		defer c.mu.Unlock()
+		c.inspect(w, r, v)
 		return
 	}
 	c.mu.Lock()

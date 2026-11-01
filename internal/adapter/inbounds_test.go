@@ -27,6 +27,9 @@ func TestInboundIdentityAndSharedOutboundCounters(t *testing.T) {
 	if *tags[0].Upload != 30 || *tags[1].Upload != 7 || *tags[0].Active != 1 || *tags[1].Active != 1 {
 		t.Fatal("outbound/duplicate/unknown flow attributed to inbound")
 	}
+	if tags[0].Type != "vless" || tags[1].Type != "vless" || tags[0].EgressType != "direct" {
+		t.Fatal("inbound protocol replaced by outbound", tags)
+	}
 	if !tags[0].DisplayEligible || !tags[1].DisplayEligible {
 		t.Fatal("inbounds require independent cards")
 	}
@@ -55,5 +58,17 @@ func TestRuntimeSelectorsAndAmbiguity(t *testing.T) {
 	c.inventory.Outbounds[3].Detour = "direct"
 	if c.inboundTags(api, nil, time.Now())[0].Egress != "" {
 		t.Fatal("detour cycle accepted")
+	}
+}
+
+func TestInboundWithoutTrafficOrResolvedRouteStillHasProtocol(t *testing.T) {
+	c := New("", "")
+	c.SetInventory(&Inventory{Inbounds: []Inbound{{Tag: "idle", Type: "trojan", Unknown: true}}})
+	tags := c.inboundTags(nil, nil, time.Now())
+	if len(tags) != 1 || tags[0].Type != "trojan" || !tags[0].DisplayEligible || tags[0].Egress != "" || tags[0].Category != "当前路径未知" {
+		t.Fatal(tags)
+	}
+	if tags[0].Upload != nil || tags[0].Up != nil {
+		t.Fatal("unobserved counters fabricated")
 	}
 }

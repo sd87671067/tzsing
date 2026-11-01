@@ -1,8 +1,7 @@
-"""Conservative route analysis. Only protocol-supported client inbounds are nodes.
+"""Conservative route analysis. Every configured inbound tag is an identity.
 Credentials, listen addresses and authentication users never enter inventory.
 Conditional matches contribute all possible routes; ambiguity stays explicit.
 """
-CLIENT_PROTOCOLS = {'vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria', 'hysteria2', 'tuic', 'anytls', 'naive'}
 
 def inbound_inventory(config):
     out = []
@@ -10,7 +9,7 @@ def inbound_inventory(config):
     if not final:
         final = next((o.get('tag') for o in config.get('outbounds', []) if o.get('tag')), None)
     for inbound in config.get('inbounds', []):
-        if inbound.get('type') not in CLIENT_PROTOCOLS or not inbound.get('tag'):
+        if not inbound.get('tag'):
             continue
         tag = inbound['tag']
         candidates, unknown, stopped = set(), False, False

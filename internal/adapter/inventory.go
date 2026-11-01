@@ -54,7 +54,7 @@ func ReadInventory(path string) (*Inventory, error) {
 		return nil, fmt.Errorf("invalid inbound inventory")
 	}
 	for _, i := range v.Inbounds {
-		if i.Tag == "" || len(i.Tag) > 128 || seenIn[i.Tag] || len(i.Routes) > 512 {
+		if i.Tag == "" || len(i.Tag) > 128 || i.Type == "" || len(i.Type) > 64 || seenIn[i.Tag] || len(i.Routes) > 512 {
 			return nil, fmt.Errorf("invalid inbound identity")
 		}
 		seenIn[i.Tag] = true

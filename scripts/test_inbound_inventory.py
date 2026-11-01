@@ -4,8 +4,14 @@ from inbound_inventory import inbound_inventory
 class InboundRoutes(unittest.TestCase):
     def config(self,rules):
         return {'inbounds':[{'tag':t,'type':'vless'} for t in ('a','b')]+[{'tag':'internal','type':'socks'}], 'outbounds':[{'type':'direct','tag':'direct'}], 'route':{'rules':rules,'final':'direct'}}
-    def test_shared_direct_and_internal_exclusion(self):
-        a=inbound_inventory(self.config([]));self.assertEqual([x['tag'] for x in a],['a','b']);self.assertTrue(all(x['routes']==['direct'] and not x['unknown'] for x in a))
+    def test_shared_direct_keeps_every_configured_tag(self):
+        a=inbound_inventory(self.config([]));self.assertEqual([x['tag'] for x in a],['a','b','internal']);self.assertTrue(all(x['routes']==['direct'] and not x['unknown'] for x in a))
+    def test_protocol_and_user_count_do_not_create_identities(self):
+        c=self.config([])
+        c['inbounds'][0]['users']=[{'name':str(n)} for n in range(14)]
+        c['inbounds'] += [{'tag':'http-in','type':'http'},{'tag':'tun-in','type':'tun'},{'type':'socks'}]
+        a=inbound_inventory(c)
+        self.assertEqual([(x['tag'],x['type']) for x in a],[('a','vless'),('b','vless'),('internal','socks'),('http-in','http'),('tun-in','tun')])
     def test_conditional_and_ruleset(self):
         a=inbound_inventory(self.config([{'inbound':['a'],'auth_user':['user'],'outbound':'proxy'},{'rule_set':['geo'],'outbound':'other'}]));self.assertEqual(a[0]['routes'],['direct','other','proxy']);self.assertEqual(a[1]['routes'],['direct','other'])
     def test_reject_before_route(self):

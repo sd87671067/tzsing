@@ -21,7 +21,10 @@ func (t *Tag) Classify() {
 	// Legacy reports without protocol metadata remain unavailable, never guessed.
 	if t.Identity == "inbound" {
 		t.Kind = "actual"
-		_, t.Category = OutboundType(t.Type)
+		_, t.Category = OutboundType(t.EgressType)
+		if t.Egress == "" {
+			t.Category = "当前路径未知"
+		}
 		t.DisplayEligible = true
 		t.DisplayReason = "客户端入站"
 		t.Verification = "never"

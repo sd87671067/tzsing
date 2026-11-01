@@ -98,32 +98,17 @@ func (d *Detector) Run(ctx context.Context, ps []Proxy, interval time.Duration) 
 
 func detect(ctx context.Context, p Proxy) model.Exit {
 	v := model.Exit{Attempted: time.Now().Unix()}
-	var dial func(context.Context, string, string) (net.Conn, error)
-	if p.Mode == "direct" {
-		v.Source = "ipify · 直连拨号"
-		v.Path = "direct"
-		dial = (&net.Dialer{Timeout: 8 * time.Second}).DialContext
-	} else if p.Mode == "singbox_route" {
-		v.Source = "ipify · sing-box 指定实际出站"
-		v.Path = "singbox_route"
-		dialer, e := proxy.SOCKS5("tcp", net.JoinHostPort(p.Server, strconv.Itoa(p.Port)), &proxy.Auth{User: p.Username, Password: p.Password}, &net.Dialer{Timeout: 8 * time.Second})
-		if e != nil {
-			v.Error = "探针不可用"
-			return v
-		}
-		cd, ok := dialer.(proxy.ContextDialer)
-		if !ok {
-			v.Error = "探针不支持超时"
-			return v
-		}
-		dial = cd.DialContext
-	} else {
+	client, closeClient, err := PathClient(p)
+	if err != nil {
 		v.Error = "尚未配置经过实际出站的探针"
 		return v
 	}
-	tr := &http.Transport{DialContext: dial, TLSHandshakeTimeout: 8 * time.Second, DisableKeepAlives: true, Proxy: nil}
-	defer tr.CloseIdleConnections()
-	client := &http.Client{Transport: tr, Timeout: 16 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer closeClient()
+	v.Source = "ipify · sing-box 指定实际出站"
+	if p.Mode == "direct" {
+		v.Source = "ipify · 直连拨号"
+	}
+	v.Path = p.Mode
 	get := func(url string, out any) error {
 		req, e := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if e != nil {
@@ -164,4 +149,27 @@ func detect(ctx context.Context, p Proxy) model.Exit {
 	v.Updated = time.Now().Unix()
 	metadata.enrich(ctx, client, ip, &v)
 	return v
+}
+
+// PathClient is shared by scheduled exit discovery and controlled interactive
+// diagnostics. A caller supplies only a server-owned, attested proxy mapping.
+func PathClient(p Proxy) (*http.Client, func(), error) {
+	var dial func(context.Context, string, string) (net.Conn, error)
+	if p.Mode == "direct" {
+		dial = (&net.Dialer{Timeout: 8 * time.Second}).DialContext
+	} else if p.Mode == "singbox_route" {
+		d, e := proxy.SOCKS5("tcp", net.JoinHostPort(p.Server, strconv.Itoa(p.Port)), &proxy.Auth{User: p.Username, Password: p.Password}, &net.Dialer{Timeout: 8 * time.Second})
+		if e != nil {
+			return nil, nil, e
+		}
+		cd, ok := d.(proxy.ContextDialer)
+		if !ok {
+			return nil, nil, fmt.Errorf("context dial unavailable")
+		}
+		dial = cd.DialContext
+	} else {
+		return nil, nil, fmt.Errorf("unverified path")
+	}
+	tr := &http.Transport{DialContext: dial, TLSHandshakeTimeout: 8 * time.Second, DisableKeepAlives: true, Proxy: nil}
+	return &http.Client{Transport: tr, Timeout: 16 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, tr.CloseIdleConnections, nil
 }

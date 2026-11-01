@@ -56,7 +56,7 @@ sudo install -m 0755 bin/tzsingbox-agent /usr/local/lib/tzsingbox/tzsingbox
 {"tag":"direct-a","mode":"singbox_route","server":"127.0.0.1","port":29001,"eligible":true}
 ```
 
-`routes_verified` 必须与已审查路径一致。新/失效路径不自动继承可信状态，未验证代理不进入普通监控；Direct 无 IP 也显示。保留旧成功出口并标记缓存不代表新路径已验证。
+`routes_verified` 必须与已审查路径一致。新/失效路径不自动继承可信状态。每个真实入站始终展示，出口未知或没有 IP 不影响入站卡片；探针出站本身不生成入站卡片。保留旧成功出口并标记缓存不代表新路径已验证。
 
 ## IPinfo 与 systemd
 
