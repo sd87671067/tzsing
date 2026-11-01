@@ -40,3 +40,12 @@ const UI=(()=>{
  function invalidate(){for(const e of [...open].reverse())e.force()}
  return {make,icon,button,bind,modal,confirm,password,copy,copyRequested,notify,invalidate};
 })();
+
+// Track the submitted control, preserving its label, width and focus. Existing
+// handlers own the request guard; spinner follows that guard through dialogs.
+(()=>{
+ const tracked=new WeakMap();
+ function track(b){if(!b||b.disabled||tracked.has(b))return;const watch=new MutationObserver(()=>{if(b.disabled)b.setAttribute('aria-busy','true');else{b.removeAttribute('aria-busy');watch.disconnect();tracked.delete(b)}});tracked.set(b,watch);watch.observe(b,{attributes:true,attributeFilter:['disabled']});}
+ document.addEventListener('click',e=>track(e.target.closest('button')),true);
+ document.addEventListener('submit',e=>track(e.submitter||e.target.querySelector('button:not([type=button])')),true);
+})();

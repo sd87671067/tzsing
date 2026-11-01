@@ -101,12 +101,14 @@ func TestRestartKeepsUncertainReservationSeparateAndBlocksOnlyOwner(t *testing.T
 	}
 	defer next.Close()
 	s, e := next.State("443", "a")
-	if e != nil || s.Used != 0 || s.Reserved != 80 || !s.Uncertain || s.Status != "reconciliation_required" {
+	if e != nil || s.Used != 0 || s.Reserved != 80 || !s.Uncertain || s.Status != "reserved_uncertain" {
 		t.Fatal(s, e)
 	}
-	if _, e = next.Reserve("443", "a", "upload", 1); !errors.Is(e, ErrUncertain) {
-		t.Fatal("restart guessed lost network result", e)
+	r2, e := next.Reserve("443", "a", "upload", 100)
+	if e != nil || r2.Amount != 20 {
+		t.Fatal("restart refunded uncertain reservation", e, r2)
 	}
+	next.Settle(r2.Token, 0)
 	if _, e = next.Reserve("443", "b", "upload", 1); e != nil {
 		t.Fatal("other UUID blocked", e)
 	}
@@ -178,7 +180,7 @@ func TestDatabaseFailureNeverAdmitsOrSettles(t *testing.T) {
 	if e = l.Settle(r.Token, 3); e == nil {
 		t.Fatal("closed DB settlement succeeded")
 	}
-	if Qualified {
-		t.Fatal("unqualified executor enabled")
+	if l.Ready() {
+		t.Fatal("closed executor reported ready")
 	}
 }

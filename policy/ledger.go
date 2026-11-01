@@ -41,9 +41,10 @@ type Ledger struct {
 	Now   func() time.Time
 }
 
-// Qualified stays false until authenticated payload, protocol and crash recovery
-// acceptance is complete. A live heartbeat alone never enables production policy.
-const Qualified = false
+// Qualified describes this version of the gate. Ready additionally requires a
+// live, versioned executor proof; an old binary or a heartbeat alone is insufficient.
+const Qualified = true
+const ExecutorVersion = "uuid-admission-v2"
 
 var ErrDenied = errors.New("UUID policy denied payload admission")
 
@@ -59,10 +60,34 @@ func Open(path string) (*Ledger, error) {
 		return nil, e
 	}
 	l := &Ledger{db: db, Now: time.Now, owner: hex.EncodeToString(token)}
-	for _, q := range []string{"PRAGMA busy_timeout=5000", `CREATE TABLE IF NOT EXISTS reservations(token TEXT PRIMARY KEY,inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,amount INTEGER NOT NULL,direction TEXT NOT NULL,owner TEXT NOT NULL,at INTEGER NOT NULL,actual INTEGER)`, `CREATE INDEX IF NOT EXISTS pending_reservations ON reservations(inbound,user,actual)`, `CREATE TABLE IF NOT EXISTS transferred(inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,direction TEXT NOT NULL,actual INTEGER NOT NULL,PRIMARY KEY(inbound,user,start,direction))`, "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", `CREATE TABLE IF NOT EXISTS policies(inbound TEXT NOT NULL,user TEXT NOT NULL,quota INTEGER NOT NULL,expires INTEGER NOT NULL,day INTEGER NOT NULL,zone TEXT NOT NULL,since INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(inbound,user))`, `CREATE TABLE IF NOT EXISTS usage(inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,used INTEGER NOT NULL,PRIMARY KEY(inbound,user,start))`, `CREATE TABLE IF NOT EXISTS runtime(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,at INTEGER NOT NULL)`} {
+	for _, q := range []string{"PRAGMA busy_timeout=5000", `CREATE TABLE IF NOT EXISTS executor_identities(owner TEXT NOT NULL,inbound TEXT NOT NULL,user TEXT NOT NULL,auth_name TEXT NOT NULL,started INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(owner,inbound,user),UNIQUE(owner,inbound,auth_name))`, `CREATE TABLE IF NOT EXISTS executor(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,owner TEXT NOT NULL,at INTEGER NOT NULL,version TEXT NOT NULL)`, `CREATE TABLE IF NOT EXISTS reservations(token TEXT PRIMARY KEY,inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,amount INTEGER NOT NULL,direction TEXT NOT NULL,owner TEXT NOT NULL,at INTEGER NOT NULL,actual INTEGER)`, `CREATE INDEX IF NOT EXISTS pending_reservations ON reservations(inbound,user,actual)`, `CREATE TABLE IF NOT EXISTS transferred(inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,direction TEXT NOT NULL,actual INTEGER NOT NULL,PRIMARY KEY(inbound,user,start,direction))`, "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", `CREATE TABLE IF NOT EXISTS policies(inbound TEXT NOT NULL,user TEXT NOT NULL,quota INTEGER NOT NULL,expires INTEGER NOT NULL,day INTEGER NOT NULL,zone TEXT NOT NULL,since INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(inbound,user))`, `CREATE TABLE IF NOT EXISTS usage(inbound TEXT NOT NULL,user TEXT NOT NULL,start INTEGER NOT NULL,used INTEGER NOT NULL,PRIMARY KEY(inbound,user,start))`, `CREATE TABLE IF NOT EXISTS runtime(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,at INTEGER NOT NULL)`} {
 		if _, e = db.Exec(q); e != nil {
 			db.Close()
 			return nil, e
+		}
+	}
+	rows, err := db.Query("PRAGMA table_info(executor_identities)")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	hasStarted := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var d any
+		if err = rows.Scan(&cid, &name, &kind, &notnull, &d, &pk); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		hasStarted = hasStarted || name == "started"
+	}
+	rows.Close()
+	if !hasStarted {
+		if _, err = db.Exec("ALTER TABLE executor_identities ADD COLUMN started INTEGER NOT NULL DEFAULT 0"); err != nil {
+			db.Close()
+			return nil, err
 		}
 	}
 	os.Chmod(path, 0600)
@@ -127,6 +152,9 @@ func (l *Ledger) Set(in, user string, v Limit) error {
 		oldStart := BillingStart(l.Now(), oldDay, oldZone).Unix()
 		newStart := BillingStart(l.Now(), v.BillingDay, v.Timezone).Unix()
 		if oldStart != newStart {
+			if _, e = tx.Exec("UPDATE reservations SET start=? WHERE inbound=? AND user=? AND start=? AND actual IS NULL", newStart, in, user, oldStart); e != nil {
+				return e
+			}
 			_, e = tx.Exec(`INSERT INTO usage SELECT inbound,user,?,used FROM usage WHERE inbound=? AND user=? AND start=? ON CONFLICT(inbound,user,start) DO UPDATE SET used=MAX(usage.used,excluded.used)`, newStart, in, user, oldStart)
 			if e != nil {
 				return e
@@ -162,11 +190,11 @@ func (l *Ledger) state(in, user string) (State, error) {
 	if e != nil && !errors.Is(e, sql.ErrNoRows) {
 		return s, e
 	}
-	if e = l.db.QueryRow("SELECT COALESCE(SUM(amount),0) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL", in, user).Scan(&s.Reserved); e != nil {
+	if e = l.db.QueryRow("SELECT COALESCE(SUM(amount),0) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL AND (start=? OR owner=?)", in, user, s.Start, l.activeOwner()).Scan(&s.Reserved); e != nil {
 		return s, e
 	}
 	var foreign int
-	if e = l.db.QueryRow("SELECT COUNT(*) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL AND owner!=?", in, user, l.owner).Scan(&foreign); e != nil {
+	if e = l.db.QueryRow("SELECT COUNT(*) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL AND owner!=? AND start=?", in, user, l.activeOwner(), s.Start).Scan(&foreign); e != nil {
 		return s, e
 	}
 	s.Uncertain = foreign > 0
@@ -176,8 +204,8 @@ func (l *Ledger) state(in, user string) (State, error) {
 	if s.ExpiresAt > 0 && s.ExpiresAt <= l.Now().Unix() {
 		s.Status = "expired"
 	} else if s.Uncertain {
-		s.Status = "reconciliation_required"
-	} else if s.Quota > 0 && s.Used >= s.Quota {
+		s.Status = "reserved_uncertain"
+	} else if s.Quota > 0 && s.Used+s.Reserved >= s.Quota {
 		s.Status = "quota_exceeded"
 	} else {
 		s.Status = "enabled"
@@ -195,22 +223,54 @@ func (l *Ledger) Charge(in, user string, n int64) error {
 	if e != nil {
 		return e
 	}
-	if s.Uncertain {
-		return ErrUncertain
-	}
 	if s.Status == "expired" || (s.Quota > 0 && s.Used+s.Reserved >= s.Quota) {
 		return ErrDenied
 	}
 	return nil
 }
 func (l *Ledger) Heartbeat() error {
+	if _, e := l.db.Exec("INSERT INTO executor VALUES(1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET pid=excluded.pid,owner=excluded.owner,at=excluded.at,version=excluded.version", os.Getpid(), l.owner, time.Now().Unix(), ExecutorVersion); e != nil {
+		return e
+	}
 	_, e := l.db.Exec("INSERT INTO runtime VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET pid=excluded.pid,at=excluded.at", os.Getpid(), time.Now().Unix())
 	return e
 }
 func (l *Ledger) Ready() bool {
 	var pid int
 	var at int64
-	return l.db.QueryRow("SELECT pid,at FROM runtime WHERE id=1").Scan(&pid, &at) == nil && time.Now().Unix()-at < 4 && time.Now().Unix() >= at && processAlive(pid)
+	var version string
+	return l.db.QueryRow("SELECT pid,at,version FROM executor WHERE id=1").Scan(&pid, &at, &version) == nil && version == ExecutorVersion && time.Now().Unix()-at < 4 && time.Now().Unix() >= at && processAlive(pid)
 }
 
 func processAlive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
+
+func (l *Ledger) activeOwner() string {
+	var pid int
+	var owner, version string
+	var at int64
+	if l.db.QueryRow("SELECT pid,owner,at,version FROM executor WHERE id=1").Scan(&pid, &owner, &at, &version) == nil && version == ExecutorVersion && time.Now().Unix()-at < 4 && processAlive(pid) {
+		return owner
+	}
+	return l.owner
+}
+
+// Registration proves that this exact UUID/name pair was loaded by the live
+// executor, rather than merely appearing in an unactivated file on disk.
+func (l *Ledger) RegisterIdentity(in, user, name string) error {
+	_, e := l.db.Exec("INSERT INTO executor_identities(owner,inbound,user,auth_name) VALUES(?,?,?,?) ON CONFLICT(owner,inbound,user) DO UPDATE SET auth_name=excluded.auth_name,started=0", l.owner, in, user, name)
+	return e
+}
+func (l *Ledger) Registered(in, user, name string) bool {
+	var n int
+	return l.db.QueryRow("SELECT COUNT(*) FROM executor_identities WHERE owner=? AND inbound=? AND user=? AND auth_name=? AND started=1", l.activeOwner(), in, user, name).Scan(&n) == nil && n == 1
+}
+func (l *Ledger) RegisteredCount(in string) int {
+	var n int
+	l.db.QueryRow("SELECT COUNT(*) FROM executor_identities WHERE owner=? AND inbound=? AND started=1", l.activeOwner(), in).Scan(&n)
+	return n
+}
+
+func (l *Ledger) MarkInboundStarted(in string) error {
+	_, e := l.db.Exec("UPDATE executor_identities SET started=1 WHERE owner=? AND inbound=?", l.owner, in)
+	return e
+}

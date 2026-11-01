@@ -8,17 +8,23 @@ import (
 // Outbound is used only by the restricted host controller, never monitoring DTOs.
 // Unsupported options fail closed instead of silently losing link semantics.
 func (l *Link) Outbound(tag string) (map[string]any, error) {
-	if l.kind == "vmess" || l.options.Get("pinSHA256") != "" || l.options.Get("insecure") == "1" {
+	if l.options.Get("pinSHA256") != "" || l.options.Get("insecure") == "1" {
 		return nil, ErrLink
 	}
 	o := map[string]any{"type": l.kind, "tag": tag, "server": l.host, "server_port": l.port}
 	switch l.kind {
+	case "vmess":
+		o["uuid"] = l.secret
+		o["security"] = l.method
+		if l.method == "" {
+			o["security"] = "auto"
+		}
 	case "vless":
 		o["uuid"] = l.secret
 		if f := l.options.Get("flow"); f != "" {
 			o["flow"] = f
 		}
-	case "trojan", "hysteria2":
+	case "trojan", "anytls", "hysteria2":
 		o["password"] = l.secret
 	case "ss":
 		o["type"] = "shadowsocks"
@@ -35,7 +41,7 @@ func (l *Link) Outbound(tag string) (map[string]any, error) {
 		return nil, ErrLink
 	}
 	sec := l.options.Get("security")
-	if sec == "tls" || sec == "reality" || l.kind == "trojan" || l.kind == "hysteria2" {
+	if sec == "tls" || sec == "reality" || l.kind == "trojan" || l.kind == "anytls" || l.kind == "hysteria2" {
 		name := l.options.Get("sni")
 		if name == "" && net.ParseIP(l.host) == nil {
 			name = l.host

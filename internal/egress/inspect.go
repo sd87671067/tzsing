@@ -2,12 +2,14 @@ package egress
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"tzsingbox/internal/model"
@@ -66,7 +68,7 @@ func CheckPath(ctx context.Context, p Proxy) PathResult {
 		return result
 	}
 	defer closeClient()
-	client.Timeout = 6 * time.Second
+	client.Timeout = 18 * time.Second
 	for _, family := range []int{4, 6} {
 		out := Check{Status: "error", Detail: "固定 HTTPS 目标连接失败"}
 		endpoint := "https://api.ipify.org?format=json"
@@ -88,8 +90,11 @@ func CheckPath(ctx context.Context, p Proxy) PathResult {
 				success++
 				result.Successes++
 				out.IP = v.IP
-			} else if status(err) == "timeout" {
-				timedout = true
+			} else {
+				out.Detail = pathFailure(err)
+				if status(err) == "timeout" {
+					timedout = true
+				}
 			}
 		}
 		out.Milliseconds = elapsed
@@ -196,6 +201,8 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 			City        string `json:"city"`
 			Fraud       *int   `json:"fraudScore"`
 			Residential *bool  `json:"isResidential"`
+			Datacenter  *bool  `json:"isDatacenter"`
+			Native      *bool  `json:"isNative"`
 			Broadcast   *bool  `json:"isBroadcast"`
 		}
 		err = fixedJSON(ctx, client, "https://my.ippure.com/v1/info", &v)
@@ -204,7 +211,7 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 		} else if !publicIP(v.IP) || !net.ParseIP(v.IP).Equal(net.ParseIP(expected)) {
 			out.Message = "IPPure 返回的出口与当前缓存不一致；未关联质量信息，请重新检测"
 		} else {
-			dst := model.Exit{Country: v.Country, CountryCode: v.CountryCode, City: v.City, Org: v.Org, Residential: v.Residential, GeoSource: "IPPure 官方公开 API", MetadataAt: now.Unix()}
+			dst := model.Exit{Country: v.Country, CountryCode: v.CountryCode, City: v.City, Org: v.Org, Residential: v.Residential, Datacenter: v.Datacenter, Native: v.Native, GeoSource: "IPPure 官方公开 API", MetadataAt: now.Unix()}
 			if v.ASN > 0 {
 				dst.ASN = "AS" + strconv.FormatInt(v.ASN, 10)
 			}
@@ -235,6 +242,43 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 			}
 		}
 	}
+	if out.Data == nil && found && entry.value.Data != nil {
+		reason := out.Message
+		out = entry.value
+		out.Cached = true
+		out.Message = reason + "；显示上次缓存"
+		ttl = time.Minute
+	}
 	sources.entries[key] = sourceEntry{until: now.Add(ttl), value: out}
 	return out
+}
+
+// Classify errors without forwarding endpoint URLs or authentication material.
+func pathFailure(err error) string {
+	if err == nil {
+		return "HTTPS 目标没有返回有效的指定地址族公网 IP"
+	}
+	if status(err) == "timeout" {
+		return "实际出站 HTTPS 连接超时"
+	}
+	var cert x509.UnknownAuthorityError
+	if errors.As(err, &cert) {
+		return "HTTPS 证书校验失败"
+	}
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "tls"), strings.Contains(s, "certificate"):
+		return "HTTPS TLS 握手或证书校验失败"
+	case strings.Contains(s, "refused"):
+		return "实际出站 TCP 连接被拒绝"
+	case strings.Contains(s, "authentication"), strings.Contains(s, "407"):
+		return "代理认证失败"
+	case strings.Contains(s, "no such host"):
+		return "DNS 解析失败"
+	case strings.Contains(s, "socks"):
+		return "sing-box 专用探针未能建立出站隧道，请检查代理认证、协议与 CONNECT 访问策略"
+	case strings.Contains(s, "eof"), strings.Contains(s, "reset"):
+		return "代理或 HTTPS 目标提前关闭连接"
+	}
+	return "实际出站 HTTPS 请求失败，目标未返回有效响应"
 }

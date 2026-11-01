@@ -115,7 +115,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	if r.URL.Path == "/intel" {
 		if !validPath {
@@ -180,7 +180,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 	}
 	if network.Successes == 0 {
 		c.audit("exit_http_failed", v.Tag)
-		fail(502, "出口 HTTPS 检测失败，保留上次缓存")
+		fail(502, "出口 HTTPS 检测失败："+network.IPv4.Detail+"；保留上次缓存")
 		return
 	}
 	if c.inspectExits == nil {

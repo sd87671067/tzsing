@@ -47,7 +47,7 @@ func TestIndependentSourceCacheAuthenticFieldsAndIPMismatch(t *testing.T) {
 		if a.Data == nil || a.Data.RiskScore != nil || a.Data.Residential != nil {
 			t.Fatal("fabricated IPinfo fields", a)
 		}
-		if b.Data == nil || b.Data.RiskScore == nil || *b.Data.RiskScore != 0 || b.Data.Residential == nil || *b.Data.Residential || b.Data.Datacenter != nil {
+		if b.Data == nil || b.Data.RiskScore == nil || *b.Data.RiskScore != 0 || b.Data.Residential == nil || *b.Data.Residential || b.Data.Datacenter != nil || b.Data.Native != nil {
 			t.Fatal("source fields lost/invented", b)
 		}
 		if n == 1 && (!a.Cached || !b.Cached) {

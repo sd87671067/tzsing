@@ -48,13 +48,6 @@ func (l *Ledger) Reserve(in, user, direction string, amount int64) (Reservation,
 	if v.ExpiresAt > 0 && now.Unix() >= v.ExpiresAt {
 		return r, ErrDenied
 	}
-	var unresolved int
-	if e = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL AND owner!=?", in, user, l.owner).Scan(&unresolved); e != nil {
-		return r, e
-	}
-	if unresolved > 0 {
-		return r, ErrUncertain
-	}
 	r.Start = BillingStart(now, v.BillingDay, v.Timezone).Unix()
 	var used, reserved int64
 	e = conn.QueryRowContext(ctx, "SELECT used FROM usage WHERE inbound=? AND user=? AND start=?", in, user, r.Start).Scan(&used)
@@ -62,7 +55,7 @@ func (l *Ledger) Reserve(in, user, direction string, amount int64) (Reservation,
 		return r, e
 	}
 	// Include all pending I/O, including operations crossing a month boundary.
-	if e = conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(amount),0) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL", in, user).Scan(&reserved); e != nil {
+	if e = conn.QueryRowContext(ctx, "SELECT COALESCE(SUM(amount),0) FROM reservations WHERE inbound=? AND user=? AND actual IS NULL AND (start=? OR owner=?)", in, user, r.Start, l.owner).Scan(&reserved); e != nil {
 		return r, e
 	}
 	if v.Quota > 0 {

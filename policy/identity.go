@@ -36,6 +36,13 @@ func Register(in, name, uuid string) error {
 		return fmt.Errorf("ambiguous authentication identity")
 	}
 	identities.values[k] = v
+	l, e := Runtime()
+	if e != nil {
+		return e
+	}
+	if l != nil {
+		return l.RegisterIdentity(in, v, name)
+	}
 	return nil
 }
 func Identity(in, name string) string {

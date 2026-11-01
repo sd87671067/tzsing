@@ -48,16 +48,36 @@ func uuid(s string) bool {
 	return e == nil && len(b) == 16
 }
 func Parse(raw string) (*Link, error) {
-	if len(raw) == 0 || len(raw) > 16<<10 || strings.IndexFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+	if len(raw) == 0 || len(raw) > 16<<10 || strings.IndexFunc(raw, func(r rune) bool { return unicode.IsControl(r) }) >= 0 {
 		return nil, ErrLink
 	}
 	if strings.HasPrefix(raw, "vmess://") {
 		return parseVMess(strings.TrimPrefix(raw, "vmess://"))
 	}
+	// A bare curl-style proxy endpoint denotes HTTP, never guessed SOCKS.
+	if !strings.Contains(raw, "://") {
+		at := strings.LastIndex(raw, "@")
+		if at < 0 {
+			return nil, ErrLink
+		}
+		credentials, endpoint := raw[:at], raw[at+1:]
+		username, password, ok := strings.Cut(credentials, ":")
+		if !ok {
+			return nil, ErrLink
+		}
+		if _, _, e := net.SplitHostPort(endpoint); e != nil {
+			return nil, ErrLink
+		}
+		raw = "http://" + url.UserPassword(username, password).String() + "@" + endpoint
+	}
+	if strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+		return nil, ErrLink
+	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Opaque != "" {
 		return nil, ErrLink
 	}
+	u.Scheme = strings.ToLower(u.Scheme)
 	l := &Link{kind: strings.ToLower(u.Scheme), host: u.Hostname(), options: u.Query()}
 	switch l.kind {
 	case "socks5":
@@ -69,7 +89,7 @@ func Parse(raw string) (*Link, error) {
 		l.options.Set("security", "tls")
 	}
 	switch l.kind {
-	case "socks", "http", "ss", "vless", "trojan", "hysteria2":
+	case "socks", "http", "ss", "vless", "trojan", "anytls", "hysteria2":
 	default:
 		return nil, ErrLink
 	}
@@ -131,7 +151,7 @@ func Parse(raw string) (*Link, error) {
 	if !validHost(l.host) || l.port < 1 || l.port > 65535 {
 		return nil, ErrLink
 	}
-	allowed := map[string]string{"socks": "", "http": "", "ss": "", "vless": "type security sni alpn fp pbk sid flow encryption", "trojan": "type security sni alpn", "hysteria2": "sni insecure obfs obfs-password pinSHA256"}[l.kind]
+	allowed := map[string]string{"socks": "", "http": "", "ss": "", "anytls": "sni alpn", "vless": "type security sni alpn fp pbk sid flow encryption", "trojan": "type security sni alpn", "hysteria2": "sni insecure obfs obfs-password pinSHA256"}[l.kind]
 	// HTTPS generated security is internal, not a silently accepted HTTP parameter.
 	if l.kind == "http" && u.Scheme == "https" {
 		allowed = "security"
@@ -171,7 +191,7 @@ func Parse(raw string) (*Link, error) {
 		if f := l.options.Get("flow"); f != "" && f != "xtls-rprx-vision" {
 			return nil, ErrLink
 		}
-	case "trojan":
+	case "trojan", "anytls":
 		if l.username == "" || l.secret != "" {
 			return nil, ErrLink
 		}
@@ -270,7 +290,7 @@ func parseVMess(raw string) (*Link, error) {
 	default:
 		return nil, ErrLink
 	}
-	return &Link{kind: "vmess", host: get("add"), port: port, secret: get("id"), options: url.Values{"security": {get("tls")}, "type": {"tcp"}}}, nil
+	return &Link{kind: "vmess", host: get("add"), port: port, secret: get("id"), method: get("scy"), options: url.Values{"security": {get("tls")}, "type": {"tcp"}, "sni": {get("sni")}, "alpn": {get("alpn")}, "fp": {get("fp")}}}, nil
 }
 func (l *Link) Preview() Preview {
 	t := l.options.Get("type")
@@ -283,7 +303,7 @@ func (l *Link) Preview() Preview {
 	s := l.options.Get("security")
 	if s == "" {
 		s = "none"
-		if l.kind == "trojan" || l.kind == "hysteria2" {
+		if l.kind == "trojan" || l.kind == "hysteria2" || l.kind == "anytls" {
 			s = "tls"
 		}
 	}

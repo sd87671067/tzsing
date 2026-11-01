@@ -25,12 +25,13 @@ func findInbound(c map[string]any, tag string) map[string]any {
 }
 
 type Snapshot struct {
-	BaselineHash string         `json:"baseline_hash"`
-	RoutePresent bool           `json:"route_present"`
-	RulesPresent bool           `json:"rules_present"`
-	Rules        []any          `json:"rules"`
-	Outbound     map[string]any `json:"outbound"`
-	InboundHash  string         `json:"inbound_hash"`
+	ExistingOutbound bool           `json:"existing_outbound,omitempty"`
+	BaselineHash     string         `json:"baseline_hash"`
+	RoutePresent     bool           `json:"route_present"`
+	RulesPresent     bool           `json:"rules_present"`
+	Rules            []any          `json:"rules"`
+	Outbound         map[string]any `json:"outbound"`
+	InboundHash      string         `json:"inbound_hash"`
 }
 
 // Only insert narrowly guarded routes immediately before the matching original
@@ -108,7 +109,7 @@ func Change(raw []byte, tag string, outbound map[string]any, prior *Snapshot) ([
 func canonicalJSON(b []byte) any { var v any; json.Unmarshal(b, &v); return v }
 func Restore(raw []byte, tag string, s Snapshot) ([]byte, error) {
 	var c map[string]any
-	if json.Unmarshal(raw, &c) != nil || digest(canonical(findInbound(c, tag))) != s.InboundHash || baselineHash(c) != s.BaselineHash {
+	if json.Unmarshal(raw, &c) != nil || digest(canonical(findInbound(c, tag))) != s.InboundHash || snapshotBaseline(c, s) != s.BaselineHash {
 		return nil, ErrScope
 	}
 	route := object(c["route"])
@@ -134,7 +135,7 @@ func Restore(raw []byte, tag string, s Snapshot) ([]byte, error) {
 	outs := []any{}
 	found := 0
 	for _, o := range array(c["outbounds"]) {
-		if text(object(o)["tag"]) == managedTag(tag) {
+		if !s.ExistingOutbound && text(object(o)["tag"]) == managedTag(tag) {
 			if string(canonical(o)) != string(canonical(s.Outbound)) {
 				return nil, ErrScope
 			}
@@ -143,7 +144,7 @@ func Restore(raw []byte, tag string, s Snapshot) ([]byte, error) {
 			outs = append(outs, o)
 		}
 	}
-	if found != 1 {
+	if !s.ExistingOutbound && found != 1 {
 		return nil, ErrScope
 	}
 	if !s.RulesPresent && len(kept) == 0 {
@@ -183,4 +184,29 @@ func baselineHash(c map[string]any) string {
 		}
 	}
 	return digest(canonical(map[string]any{"route": route, "outbounds": outs}))
+}
+
+// Existing outbound bindings own only their exact guarded route additions.
+func snapshotBaseline(config map[string]any, s Snapshot) string {
+	if !s.ExistingOutbound {
+		return baselineHash(config)
+	}
+	c := candidateMap(canonical(config))
+	route := object(c["route"])
+	rules := []any{}
+	owned := map[string]int{}
+	for _, r := range s.Rules {
+		owned[string(canonical(r))]++
+	}
+	for _, r := range array(route["rules"]) {
+		k := string(canonical(r))
+		if owned[k] > 0 {
+			owned[k]--
+		} else {
+			rules = append(rules, r)
+		}
+	}
+	route["rules"] = rules
+	c["route"] = route
+	return baselineHash(c)
 }

@@ -49,8 +49,8 @@ func (a *App) overlayPolicies(u store.User, views []model.View) {
 				continue
 			}
 			t.PolicyState = s.Status
-			t.ShowExpiry = u.Role == "admin" || a.DB.Setting("show_expiry", 0) == 1
-			t.ShowQuota = u.Role == "admin" || a.DB.Setting("show_quota", 1) == 1
+			t.ShowExpiry = a.DB.Setting("show_expiry", 0) == 1
+			t.ShowQuota = a.DB.Setting("show_quota", 1) == 1
 			if t.ShowExpiry {
 				t.ExpiresAt = s.ExpiresAt
 				t.Timezone = s.Timezone
@@ -59,6 +59,8 @@ func (a *App) overlayPolicies(u store.User, views []model.View) {
 			}
 			if t.ShowQuota {
 				t.Quota = s.Quota
+				t.PolicyReserved = s.Reserved
+				t.PolicyUncertain = s.Uncertain
 				t.BillingDay = s.BillingDay
 				t.Timezone = s.Timezone
 				t.PeriodStart = s.Start
@@ -69,6 +71,8 @@ func (a *App) overlayPolicies(u store.User, views []model.View) {
 				}
 			} else {
 				t.Quota = 0
+				t.PolicyReserved = 0
+				t.PolicyUncertain = false
 				t.BillableUsed = nil
 				t.MeteringSince = 0
 				t.PeriodStart = 0
@@ -80,6 +84,31 @@ func (a *App) overlayPolicies(u store.User, views []model.View) {
 func (a *App) nodePolicy(w http.ResponseWriter, r *http.Request, u store.User) {
 	if u.Role != "admin" || !a.controlPermission(u, "change") {
 		fail(w, 403)
+		return
+	}
+	if r.Method == "GET" {
+		id := r.URL.Query().Get("node_id")
+		server, raw, e := a.DB.Resolve(u, id)
+		if e != nil || server != a.ControlServer || !strings.HasPrefix(raw, "identity:") {
+			fail(w, 403)
+			return
+		}
+		out, status := a.hostControl(r.Context(), "policy-status", map[string]string{})
+		if status != 200 {
+			reply(w, status, out)
+			return
+		}
+		items, ok := out["items"].(map[string]any)
+		if !ok {
+			fail(w, 503)
+			return
+		}
+		state, ok := items[raw]
+		if !ok {
+			reply(w, 503, map[string]string{"error": "此 UUID 的策略状态不可用"})
+			return
+		}
+		reply(w, 200, map[string]any{"ready": out["ready"], "policy": state})
 		return
 	}
 	if r.Method != "POST" {

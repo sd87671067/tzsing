@@ -45,11 +45,11 @@ const NodeControl=(()=>{
   form.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;try{await api(me?.role==='admin'?'admin/nodes':'alias',me?.role==='admin'?'PATCH':'PUT',{node_id:id,name:input.value});saved=true;m.force();update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin();message('显示名称已保存')}catch(e){message(e.message)}finally{save.disabled=false}};
  }
  async function policy(id,trigger){
-  const r=rows.get(id);if(!r)return;const f=node('form','control-body'),ready=['enabled','unlimited','expired','quota_exceeded'].includes(r.t.policy_state),fields=PolicyFields.create(f,r.t,ready),state=node('p','notice','当前状态：'+policyLabel(r.t.policy_state)),save=node('button','primary','保存策略');
+  const r=rows.get(id);if(!r)return;let value=r.t,ready=false,reason="";try{const p=await api('node-policy?'+new URLSearchParams({node_id:id}));value=p.policy;ready=p.ready}catch(e){reason=e.message};const f=node('form','control-body'),fields=PolicyFields.create(f,value,ready),state=node('p','notice',reason||('当前状态：'+policyLabel(value.status||r.t.policy_state))),save=node('button','primary','保存策略');
   save.disabled=!ready;f.append(state,save);let live=true;const m=UI.modal('额度与有效期',f,{trigger,onClose:()=>live=false});editor=m;
   f.onsubmit=async e=>{e.preventDefault();if(save.disabled||!f.reportValidity())return;save.disabled=true;
    try{const values=fields.read(),p=await api('node-policy','POST',{node_id:id,action:'preview',policy:values});if(!live)return;
-    if(!await UI.confirm('确认更新此 UUID 的策略',r.t.name+'\n月额度：'+(values.quota?bytes(values.quota):'不限')+'\n到期：'+(values.expires_at?when(values.expires_at)+' · '+fields.zone:'永不过期')+'\n重置：每月 '+values.billing_day+' 日 · '+values.timezone+'\n无需重启 sing-box，其他 UUID 保持当前策略。','确认保存'))return;
+    if(!await UI.confirm('确认更新此 UUID 的策略',r.t.name+'\n月额度：'+(values.quota?bytes(values.quota):'不限')+'\n到期：'+(values.expires_at?when(values.expires_at)+' · '+fields.zone:'未设置')+'\n重置：每月 '+values.billing_day+' 日 · '+values.timezone+'\n无需重启 sing-box，其他 UUID 保持当前策略。','确认保存'))return;
     await api('node-policy','POST',{node_id:id,action:'apply',nonce:p.nonce});if(live){m.force();update(await api('snapshot'));UI.notify('策略已由数据路径执行')}
    }catch(err){if(live)UI.notify(err.message,'error')}finally{if(live)save.disabled=false}
   };
@@ -86,5 +86,14 @@ const NodeControl=(()=>{
    }catch(err){if(live){text(preview,'');UI.notify(err.message,'error')}}finally{if(live)save.disabled=false}
   };
  }
- return {show,reconcile,invalidate};
+ async function mount(id,host){
+  const r=rows.get(id);if(!r||me?.role!=='admin')return;
+  const nameForm=node('form'),name=node('input'),saveName=node('button','primary','保存名称');name.value=r.t.global_name||r.t.name;name.maxLength=128;const label=node('label','','名称');label.append(name);nameForm.append(label,saveName);host.append(nameForm);
+  nameForm.onsubmit=async e=>{e.preventDefault();if(saveName.disabled)return;saveName.disabled=true;try{await api('admin/nodes','PATCH',{node_id:id,name:name.value});update(await api('snapshot'));UI.notify('名称已保存')}catch(e){UI.notify(e.message,'error')}finally{saveName.disabled=false}};
+  const routeForm=node('form'),outbound=node('select'),saveRoute=node('button','primary','保存出站绑定'),routeLabel=node('label','','当前出站');routeLabel.append(outbound);routeForm.append(routeLabel,saveRoute);host.append(routeForm);saveRoute.disabled=true;
+  try{const g=await gate(id);for(const o of g.outbounds||[])outbound.add(new Option(o.tag+' · '+o.type,o.tag));outbound.value=r.t.egress;saveRoute.disabled=!g.apply||!outbound.options.length}catch(e){host.append(node('p','notice',e.message))}
+  routeForm.onsubmit=async e=>{e.preventDefault();if(saveRoute.disabled)return;saveRoute.disabled=true;try{const g=await gate(id),p=await api('control/preview','POST',{node_id:id,outbound:outbound.value,nonce:g.nonce});if(!p.writable||!p.effects)throw Error(p.reason||'绑定条件未满足');if(!await UI.confirm('确认更换出站',confirmationText(r,p.effects,'绑定：'+outbound.value),'确认应用'))return;await api('control/apply','POST',{node_id:id,nonce:p.nonce});UI.notify('出站绑定已生效')}catch(e){UI.notify(e.message,'error')}finally{saveRoute.disabled=false}};
+  const tools=node('div','row-actions');for(const [title,fn]of [['月额度与到期时间',b=>policy(id,b)],['启用 / 停用',b=>mutate(id,b)],['恢复原出站',b=>edit(id,b,true)],['删除入站',b=>mutate(id,b,'delete')]]){const b=node('button','',title);b.type='button';b.onclick=()=>fn(b);tools.append(b)}host.append(tools);
+ }
+ return {show,reconcile,invalidate,mount};
 })();

@@ -96,4 +96,4 @@ docker compose ps
 
 逐 UUID 限制的实际执行状态与本轮验收边界见 [UUID 执行状态](docs/UUID-EXECUTION-STATUS.md)。
 
-现有 UUID 的独立出站、启停/删除事务和用户操作权限见 [操作与安全边界](docs/admin-operations.md)。唯一写入者接管与生产配置事务已打通；到期自动停用和可靠月额度封禁仍未完成。
+现有 UUID 的独立出站、启停/删除事务和用户操作权限见 [操作与安全边界](docs/admin-operations.md)。唯一写入者接管与生产配置事务已打通；v2 到期/月额度 gate 已通过隔离载荷验证，生产激活仍需单独批准 sing-box 重启。详见上述执行状态文档。

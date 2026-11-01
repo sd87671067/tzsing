@@ -27,11 +27,13 @@ const NodeInspect=(()=>{
   }
   r=selected(r);
   const entry=cache.get(key(r)),answer=entry?.value,observed=result?.route===r.t.route_version&&result.pathIndex===pathIndex?result.ip:null,ip=observed||(r.t.ip?.verified?r.t.ip:{}),data=answer?.data||(source==='ipinfo'?ip:{});
+  const yesNo=v=>v===true?'是':v===false?'否':'未知';
   const ips=result?.route===r.t.route_version&&result.pathIndex===pathIndex?result.network:null;
   const ipv4=ips?.ipv4?.ip||ip.ipv4,ipv6=ips?.ipv6?.ip||ip.ipv6;
   fill($('#detail-ip'),[
    ['IPv4',ipv4||'待检测'],['IPv6',ipv6],['当前出站',r.t.egress||(['当前路径未知','路径待检测'].includes(r.t.category)?'路径待检测':'关联出口（Tag 未公开）')],
    ['出口类型',r.t.egress?r.t.category:''],['国家 / 地区',countryName(data)],['城市',data.city],['ASN',data.asn],['运营商',data.org],['IP 类型',data.ip_type],
+   ...(source==='ippure'?[['是否机房 IP',yesNo(data.datacenter)],['是否住宅 IP',yesNo(data.residential)],['是否原生 IP',yesNo(data.native)]]:[]),
    ['风险评分',data.risk_score==null?'':data.risk_score+' / 100'],['检测时间',ip.updated?when(ip.updated):''],['状态',result?.failed||ip.error?'最近检测缓存':!ipv4&&!ipv6?'路径待检测':'']
   ]);
   const k=key(r);text($('#source-message'),pending.has(generation+'|'+k)?'正在通过服务端读取 '+(source==='ipinfo'?'IPinfo':'IPPure')+'…':answer?.message||(!ipv4&&!ipv6?'当前路径待检测':source==='ippure'&&!answer?'IPPure 仅查询当前路径自身的出口。':''));

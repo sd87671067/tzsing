@@ -37,6 +37,11 @@ func pinPublic(o map[string]any) (map[string]any, error) {
 	for k, v := range o {
 		pinned[k] = v
 	}
+	if tls := object(pinned["tls"]); tls["enabled"] == true && text(tls["server_name"]) == "" && net.ParseIP(text(o["server"])) == nil {
+		tls = object(candidateMap(canonical(o))["tls"])
+		tls["server_name"] = o["server"]
+		pinned["tls"] = tls
+	}
 	pinned["server"] = ips[0].String()
 	return pinned, nil
 }
@@ -71,14 +76,19 @@ func (c *Controller) probeClient(o map[string]any) error {
 		out[k] = v
 	}
 	out["tag"] = "probe-out"
-	conf := map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "socks", "tag": "probe-in", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": "probe", "password": secret}}}}, "outbounds": []any{out}, "route": map[string]any{"final": "probe-out"}}
+	conf := map[string]any{"log": map[string]any{"level": "error", "timestamp": false}, "inbounds": []any{map[string]any{"type": "socks", "tag": "probe-in", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": "probe", "password": secret}}}}, "outbounds": []any{out}, "route": map[string]any{"final": "probe-out"}}
 	if e = atomicFile(filepath.Join(dir, "config.json"), canonical(conf), 0600); e != nil {
 		return e
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 42*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Config.Binary, "run", "-c", filepath.Join(dir, "config.json"))
 	cmd.Dir = dir
+	diagnostic := new(probeLog)
+	cmd.Stderr = diagnostic
+	cmd.Stdout = diagnostic
+	// Child probes must never inherit the production policy ledger.
+	cmd.Env = append(os.Environ(), "TZSING_POLICY_DB=")
 	if cmd.Start() != nil {
 		return errors.New("隔离探测实例启动失败")
 	}
@@ -92,29 +102,42 @@ func (c *Controller) probeClient(o map[string]any) error {
 			break
 		}
 		if time.Now().After(until) {
-			return errors.New("隔离探测启动超时")
+			return errors.New("隔离探测未就绪：" + diagnostic.reason())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	d, e := proxy.SOCKS5("tcp", address, &proxy.Auth{User: "probe", Password: secret}, &net.Dialer{Timeout: 3 * time.Second})
+	d, e := proxy.SOCKS5("tcp", address, &proxy.Auth{User: "probe", Password: secret}, &net.Dialer{Timeout: 8 * time.Second})
 	if e != nil {
 		return errors.New("隔离探测不可用")
 	}
-	transport := &http.Transport{DialContext: d.(proxy.ContextDialer).DialContext, TLSHandshakeTimeout: 4 * time.Second}
+	transport := &http.Transport{DialContext: d.(proxy.ContextDialer).DialContext, TLSHandshakeTimeout: 12 * time.Second}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.ipify.org?format=json", nil)
-	res, e := client.Do(req)
-	if e != nil {
-		return errors.New("实际路径连通性检查失败")
-	}
-	defer res.Body.Close()
+	client := &http.Client{Transport: transport, Timeout: 18 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	var v struct {
 		IP string `json:"ip"`
 	}
-	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1024)).Decode(&v) != nil || !public(net.ParseIP(v.IP)) {
-		return errors.New("实际路径出口校验失败")
+	var last error
+	for _, endpoint := range []string{"https://api.ip.cc", "https://api.ipify.org?format=json"} {
+		req, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		res, err := client.Do(req)
+		if err != nil {
+			diagnostic.Write([]byte(err.Error()))
+			last = errors.New(diagnostic.reason())
+			continue
+		}
+		v.IP = ""
+		err = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&v)
+		res.Body.Close()
+		if res.StatusCode == 200 && err == nil && public(net.ParseIP(v.IP)) {
+			last = nil
+			break
+		}
+		last = errors.New("HTTPS 目标未返回有效公网出口 IP")
 	}
+	if last != nil {
+		return last
+	}
+
 	c.lastIP = v.IP
 	return nil
 }

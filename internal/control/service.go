@@ -60,20 +60,21 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
-	Policy       *policy.Limit    `json:"policy,omitempty"`
-	Outbound     string           `json:"outbound,omitempty"`
-	RouteVersion string           `json:"route_version,omitempty"`
-	Node         *UUIDNodeRequest `json:"node,omitempty"`
-	AuthID       string           `json:"auth_id,omitempty"`
-	Source       string           `json:"source,omitempty"`
-	PreviousIPv4 string           `json:"previous_ipv4,omitempty"`
-	PreviousIPv6 string           `json:"previous_ipv6,omitempty"`
-	Tag          string           `json:"tag"`
-	Link         string           `json:"link"`
-	Plan         string           `json:"plan"`
-	Action       string           `json:"action,omitempty"`
-	Profile      string           `json:"profile"`
-	Label        string           `json:"label"`
+	OutboundNode *OutboundNodeRequest `json:"outbound_node,omitempty"`
+	Policy       *policy.Limit        `json:"policy,omitempty"`
+	Outbound     string               `json:"outbound,omitempty"`
+	RouteVersion string               `json:"route_version,omitempty"`
+	Node         *UUIDNodeRequest     `json:"node,omitempty"`
+	AuthID       string               `json:"auth_id,omitempty"`
+	Source       string               `json:"source,omitempty"`
+	PreviousIPv4 string               `json:"previous_ipv4,omitempty"`
+	PreviousIPv6 string               `json:"previous_ipv6,omitempty"`
+	Tag          string               `json:"tag"`
+	Link         string               `json:"link"`
+	Plan         string               `json:"plan"`
+	Action       string               `json:"action,omitempty"`
+	Profile      string               `json:"profile"`
+	Label        string               `json:"label"`
 }
 type transaction struct {
 	Hash     string              `json:"hash"`
@@ -223,7 +224,7 @@ func (c *Controller) apply(p plan) error {
 	if e != nil || digest(raw) != p.Hash {
 		return ErrScope
 	}
-	if !p.Restore && p.Action == "" && c.Hooks == nil && text(p.Snapshot.Outbound["type"]) != "direct" {
+	if !p.Restore && p.Action == "" && c.Hooks == nil && !p.Snapshot.ExistingOutbound && text(p.Snapshot.Outbound["type"]) != "direct" {
 		pinned, err := pinPublic(p.Snapshot.Outbound)
 		if err != nil {
 			return err
@@ -322,7 +323,12 @@ func (c *Controller) apply(p plan) error {
 			return rollback(e)
 		}
 	}
-	if p.Action != "" && c.Hooks == nil {
+	if p.Action == "outbound-save" {
+		if e = c.probe(p.Snapshot.Outbound); e != nil {
+			return rollback(e)
+		}
+	}
+	if p.Action != "" && p.Action != "outbound-save" && p.Action != "outbound-delete" && c.Hooks == nil {
 		peers := candidateMap(p.Candidate)
 		in := findInbound(peers, p.Tag)
 		users := []any{}
@@ -341,7 +347,7 @@ func (c *Controller) apply(p plan) error {
 		}
 	}
 	expectedExit := c.lastIP
-	if p.Action == "" || (p.Action == "create" && !identityDisabled(candidate, p.Tag, p.AuthID)) {
+	if p.Action == "" || (p.Action == "create" && !identityDisabled(candidate, p.Tag, p.AuthID) && !c.policyDenies(p.Tag, p.AuthID)) {
 		checked := candidateMap(p.Candidate)
 		if p.AuthID != "" {
 			scoped, err := IdentityInbound(findInbound(checked, p.Tag), p.AuthID)
@@ -356,7 +362,9 @@ func (c *Controller) apply(p plan) error {
 			}
 		}
 		if e = c.probeNode(checked, p.Tag); e != nil {
-			return rollback(e)
+			if p.Action != "create" || !c.policyDenies(p.Tag, p.AuthID) {
+				return rollback(e)
+			}
 		}
 		if p.Action == "" && !p.Restore && expectedExit != "" && c.lastIP != expectedExit {
 			return rollback(errors.New("UUID 实际出口与目标出站不一致"))
@@ -366,15 +374,18 @@ func (c *Controller) apply(p plan) error {
 	if readErr != nil || digest(currentAfter) != digest(p.Candidate) {
 		return rollback(errors.New("应用期间发生外部写入"))
 	}
-	if c.Config.ExitFile != "" && c.lastIP != "" {
+	if c.Config.ExitFile != "" && c.lastIP != "" && p.Action != "outbound-save" && p.Action != "outbound-delete" {
 		receipt := map[string]any{"config_hash": digest(p.Candidate), "tag": p.Tag, "outbound": text(p.Snapshot.Outbound["tag"]), "ip": c.lastIP, "at": time.Now().Unix()}
 		atomicFile(c.Config.ExitFile, canonical(receipt), 0644)
 	}
 	// Rebase only snapshots whose baseline exactly matches the validated input.
 	// Trusted internal identity changes can evolve policy; external edits cannot.
 	for key, snapshot := range journals {
-		if snapshot.BaselineHash == baselineHash(original) {
-			snapshot.BaselineHash = baselineHash(candidate)
+		if p.Action == "outbound-save" && text(snapshot.Outbound["tag"]) == p.Tag && !snapshot.ExistingOutbound {
+			snapshot.Outbound = p.Snapshot.Outbound
+		}
+		if snapshot.BaselineHash == snapshotBaseline(original, snapshot) {
+			snapshot.BaselineHash = snapshotBaseline(candidate, snapshot)
 			journals[key] = snapshot
 		}
 	}
@@ -458,6 +469,10 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeEnabled = false
 			writerReason = e.Error()
 		}
+	}
+	if r.URL.Path == "/outbound-catalog" || r.URL.Path == "/outbound-preview" || r.URL.Path == "/outbound-apply" || r.URL.Path == "/outbound-test" {
+		c.outboundNodes(w, r, v, raw, writeEnabled)
+		return
 	}
 	if r.URL.Path == "/policy-status" || r.URL.Path == "/policy-preview" || r.URL.Path == "/policy-apply" {
 		c.policyRequest(w, r, v, raw, writeEnabled)
@@ -688,7 +703,9 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					kind, _ := model.OutboundType(text(current["type"]))
 					if text(current["tag"]) == v.Outbound && kind == "actual" {
 						o = candidateMap(canonical(current))
-						o["tag"] = managedTag(journalKey)
+						if v.AuthID == "" {
+							o["tag"] = managedTag(journalKey)
+						}
 					}
 				}
 				if o == nil {
@@ -714,7 +731,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				prior = &s
 			}
 			if v.AuthID != "" {
-				p.Candidate, p.Snapshot, e = ChangeIdentity(raw, v.Tag, v.AuthID, o, prior)
+				p.Candidate, p.Snapshot, e = changeIdentity(raw, v.Tag, v.AuthID, o, prior, v.Outbound != "")
 			} else {
 				p.Candidate, p.Snapshot, e = Change(raw, v.Tag, o, prior)
 			}

@@ -239,6 +239,7 @@ func copyIntel(dst *model.Exit, src model.Exit) {
 	dst.Org = src.Org
 	dst.GeoSource = src.GeoSource
 	dst.IPType = src.IPType
+	dst.Native = src.Native
 	dst.Residential = src.Residential
 	dst.Datacenter = src.Datacenter
 	dst.RiskScore = src.RiskScore

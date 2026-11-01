@@ -446,6 +446,9 @@ func (a *App) history(w http.ResponseWriter, r *http.Request, u store.User) {
 }
 func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path string) {
 	switch path {
+	case "outbounds":
+		a.outboundAdmin(w, r, u)
+		return
 	case "node-catalog", "node-preview", "node-create", "node-delete", "node-state":
 		a.uuidAdmin(w, r, u, path)
 		return

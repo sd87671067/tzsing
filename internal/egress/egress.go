@@ -152,9 +152,9 @@ func detect(ctx context.Context, p Proxy) model.Exit {
 		return v
 	}
 	defer closeClient()
-	v.Source = "ipify · sing-box 指定实际出站"
+	v.Source = "HTTPS IP · sing-box 指定实际出站"
 	if p.Mode == "direct" {
-		v.Source = "ipify · 直连拨号"
+		v.Source = "HTTPS IP · 直连拨号"
 	}
 	v.Path = p.Mode
 	get := func(url string, out any) error {
@@ -175,8 +175,12 @@ func detect(ctx context.Context, p Proxy) model.Exit {
 	var a struct {
 		IP string `json:"ip"`
 	}
-	if get("https://api.ipify.org?format=json", &a) == nil && publicIP(a.IP) && net.ParseIP(a.IP).To4() != nil {
-		v.IPv4 = a.IP
+	for _, endpoint := range []string{"https://api.ip.cc", "https://api.ipify.org?format=json"} {
+		a.IP = ""
+		if get(endpoint, &a) == nil && publicIP(a.IP) && net.ParseIP(a.IP).To4() != nil {
+			v.IPv4 = a.IP
+			break
+		}
 	}
 	a.IP = ""
 	if get("https://api6.ipify.org?format=json", &a) == nil {
@@ -217,8 +221,8 @@ func PathClient(p Proxy) (*http.Client, func(), error) {
 	} else {
 		return nil, nil, fmt.Errorf("unverified path")
 	}
-	tr := &http.Transport{DialContext: dial, TLSHandshakeTimeout: 8 * time.Second, DisableKeepAlives: true, Proxy: nil}
-	return &http.Client{Transport: tr, Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, tr.CloseIdleConnections, nil
+	tr := &http.Transport{DialContext: dial, TLSHandshakeTimeout: 12 * time.Second, DisableKeepAlives: true, Proxy: nil}
+	return &http.Client{Transport: tr, Timeout: 18 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, tr.CloseIdleConnections, nil
 }
 
 // Publish the base IP first. Provider failures cannot delay it, replace it or
@@ -261,6 +265,12 @@ func (d *Detector) applyIntel(p Proxy, scope string, base model.Exit, source str
 		old.QualityIP = data.QualityIP
 		old.QualitySource = data.QualitySource
 		old.QualityAt = data.QualityAt
+		if data.Datacenter != nil {
+			old.Datacenter = data.Datacenter
+		}
+		if data.Native != nil {
+			old.Native = data.Native
+		}
 		if data.Residential != nil {
 			old.Residential = data.Residential
 		}

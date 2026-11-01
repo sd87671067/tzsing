@@ -28,6 +28,9 @@ func identityUser(config map[string]any, tag, id string) (map[string]any, error)
 }
 
 func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snapshot) ([]byte, Snapshot, error) {
+	return changeIdentity(raw, tag, id, out, prior, false)
+}
+func changeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snapshot, existing bool) ([]byte, Snapshot, error) {
 	if prior != nil {
 		base, e := RestoreIdentity(raw, tag, id, *prior)
 		if e != nil {
@@ -42,18 +45,21 @@ func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 	}
 	key := identityKey(tag, id)
 	name := managedTag(key)
+	if existing {
+		name = text(out["tag"])
+	}
 	if text(out["tag"]) != name {
 		return nil, Snapshot{}, ErrScope
 	}
 	for _, v := range array(c["outbounds"]) {
-		if text(object(v)["tag"]) == name {
+		if !existing && text(object(v)["tag"]) == name {
 			return nil, Snapshot{}, ErrScope
 		}
 	}
 	_, rp := c["route"]
 	route := object(c["route"])
 	_, rsp := route["rules"]
-	s := Snapshot{BaselineHash: baselineHash(c), InboundHash: digest(canonical(u)), RoutePresent: rp, RulesPresent: rsp, Outbound: out}
+	s := Snapshot{ExistingOutbound: existing, BaselineHash: baselineHash(c), InboundHash: digest(canonical(u)), RoutePresent: rp, RulesPresent: rsp, Outbound: out}
 	guard := map[string]any{"inbound": []any{tag}, "auth_user": []any{text(u["name"])}}
 	rules := []any{}
 	for _, v := range array(route["rules"]) {
@@ -79,7 +85,9 @@ func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 	s.Rules = append(s.Rules, fallback)
 	route["rules"] = rules
 	c["route"] = route
-	c["outbounds"] = append(array(c["outbounds"]), out)
+	if !existing {
+		c["outbounds"] = append(array(c["outbounds"]), out)
+	}
 	candidate := canonical(c)
 	restored, e := RestoreIdentity(candidate, tag, id, s)
 	if e != nil || !reflect.DeepEqual(canonicalJSON(raw), canonicalJSON(restored)) {
@@ -91,7 +99,7 @@ func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 func RestoreIdentity(raw []byte, tag, id string, s Snapshot) ([]byte, error) {
 	c := candidateMap(raw)
 	u, e := identityUser(c, tag, id)
-	if e != nil || digest(canonical(u)) != s.InboundHash || baselineHash(c) != s.BaselineHash {
+	if e != nil || digest(canonical(u)) != s.InboundHash || snapshotBaseline(c, s) != s.BaselineHash {
 		return nil, ErrScope
 	}
 	// Reuse exact-addition restoration with a synthetic inbound key. The actual

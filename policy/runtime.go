@@ -1,22 +1,33 @@
 package policy
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
 var once sync.Once
 var runtimeLedger *Ledger
 var runtimeErr error
+var executorLock *os.File
 
 // Runtime is opt-in for a dedicated sing-box service only. Probe instances and
 // installations without this environment retain their original behavior.
 func Runtime() (*Ledger, error) {
 	once.Do(func() {
-		if p := os.Getenv("TZSING_POLICY_DB"); p != "" {
+		if p := os.Getenv("TZSING_POLICY_DB"); p != "" && len(os.Args) > 1 && os.Args[1] == "run" {
+			executorLock, runtimeErr = os.OpenFile(p+".executor.lock", os.O_CREATE|os.O_RDWR, 0600)
+			if runtimeErr != nil {
+				return
+			}
+			if syscall.Flock(int(executorLock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+				runtimeErr = fmt.Errorf("policy executor already running")
+				return
+			}
 			runtimeLedger, runtimeErr = Open(p)
 			if runtimeErr == nil {
 				runtimeLedger.Heartbeat()
@@ -68,15 +79,27 @@ func (c *meteredConn) Read(b []byte) (int, error) {
 	if l == nil {
 		return c.Conn.Read(b)
 	}
-	r, e := l.Reserve(c.in, c.user, "upload", int64(min(len(b), 32<<10)))
-	if e != nil {
-		return 0, e
+	// Read into a bounded private buffer before admission: an idle socket must
+	// not reserve the UUID's entire remaining allowance while waiting for input.
+	n, e := c.Conn.Read(b[:min(len(b), 32<<10)])
+	if n == 0 {
+		return n, e
 	}
-	n, e := c.Conn.Read(b[:r.Amount])
-	if x := l.Settle(r.Token, int64(n)); x != nil {
+	r, x := l.Reserve(c.in, c.user, "upload", int64(n))
+	if x != nil {
 		c.Conn.Close()
 		return 0, x
 	}
+	admitted := min(n, int(r.Amount))
+	if x = l.Settle(r.Token, int64(admitted)); x != nil {
+		c.Conn.Close()
+		return 0, x
+	}
+	if admitted != n {
+		c.Conn.Close()
+		return admitted, ErrDenied
+	}
+
 	return n, e
 }
 func (c *meteredConn) Write(b []byte) (int, error) {

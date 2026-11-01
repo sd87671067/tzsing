@@ -7,6 +7,8 @@ type EgressPath struct {
 }
 
 type Tag struct {
+	PolicyReserved   int64        `json:"policy_reserved,omitempty"`
+	PolicyUncertain  bool         `json:"policy_uncertain,omitempty"`
 	PolicyState      string       `json:"policy_state,omitempty"`
 	BillableUsed     *int64       `json:"billable_used,omitempty"`
 	MeteringSince    int64        `json:"metering_since,omitempty"`
@@ -67,6 +69,7 @@ type Exit struct {
 	MetadataCached bool   `json:"metadata_cached,omitempty"`
 	MetadataAt     int64  `json:"metadata_at,omitempty"`
 	IPType         string `json:"ip_type,omitempty"`
+	Native         *bool  `json:"native,omitempty"`
 	Residential    *bool  `json:"residential,omitempty"`
 	Datacenter     *bool  `json:"datacenter,omitempty"`
 	RiskScore      *int   `json:"risk_score,omitempty"`
