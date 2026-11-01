@@ -120,9 +120,18 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		actions[action] = a.controlPermission(fresh, action)
 		anyPermission = anyPermission || actions[action]
 	}
+	if fresh.Role != "admin" {
+		anyPermission = anyPermission || a.DB.UUIDPermission(fresh.ID, v.Node).Change
+	}
 	if !anyPermission {
 		fail(w, 403)
 		return
+	}
+	if fresh.Role != "admin" {
+		p := a.DB.UUIDPermission(fresh.ID, v.Node)
+		actions["change"] = p.Change
+		actions["restore"] = p.Change
+		anyPermission = anyPermission || p.Change
 	}
 	issue := func(plan, action string) string {
 		a.mu.Lock()
@@ -139,7 +148,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			return ""
 		}
 		token := auth.Random()
-		a.controlNonces[auth.Digest(token)] = controlNonce{Session: auth.Digest(cookie.Value), User: fresh.ID, Node: v.Node, Expires: time.Now().Add(2 * time.Minute), Plan: plan, Action: action}
+		a.controlNonces[auth.Digest(token)] = controlNonce{Session: auth.Digest(cookie.Value), User: fresh.ID, Node: v.Node, Expires: time.Now().Add(2 * time.Minute), Plan: plan, Action: action, OutboundID: v.Outbound}
 		return token
 	}
 	payload := map[string]string{"tag": tag}
@@ -149,6 +158,23 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	if path == "status" {
 		out, status := a.hostControl(r.Context(), "status", payload)
 		if status == 200 {
+			if fresh.Role != "admin" && actions["change"] {
+				items, err := a.syncOutbounds(r.Context())
+				if err != nil {
+					fail(w, 503)
+					return
+				}
+				filtered := []any{}
+				for _, o := range items {
+					if a.DB.CanBind(fresh, v.Node, o.ID) {
+						filtered = append(filtered, map[string]string{"tag": o.ID, "type": "授权出站", "name": o.Name})
+					}
+				}
+				out["outbounds"] = filtered
+			}
+			if fresh.Role != "admin" && !actions["change"] {
+				out["outbounds"] = []any{}
+			}
 			out["actions"] = actions
 			out["nonce"] = issue("", "")
 			out["apply"] = out["apply"] == true && actions["change"]
@@ -185,6 +211,25 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		fail(w, 409)
 		return
 	}
+	// A normal user's request contains an opaque outbound ID, never a raw tag
+	// or a credential-bearing link. Recheck the triple on both preview and apply.
+	if fresh.Role != "admin" && (path == "preview" || path == "apply") {
+		id := v.Outbound
+		if path == "apply" {
+			id = n.OutboundID
+		}
+		if v.Link != "" || v.Action != "" || !a.DB.CanBind(fresh, v.Node, id) {
+			fail(w, 403)
+			return
+		}
+		o, err := a.DB.Outbound(id)
+		if err != nil {
+			fail(w, 403)
+			return
+		}
+		v.Outbound = id
+		payload["outbound"] = o.Tag
+	}
 	hostPath := path
 	switch path {
 	case "preview":
@@ -193,7 +238,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			return
 		}
 		payload["link"] = v.Link
-		payload["outbound"] = v.Outbound
+		if fresh.Role == "admin" {
+			payload["outbound"] = v.Outbound
+		}
 		if v.Action != "" {
 			if fresh.Role != "admin" || (v.Action != "enable" && v.Action != "disable" && v.Action != "delete") {
 				fail(w, 403)
@@ -226,7 +273,23 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		fail(w, 500)
 		return
 	}
+	// Persist a conservative binding intent before production apply. A crash
+	// leaves a restorable route record rather than an untracked privilege.
+	if path == "apply" && fresh.Role != "admin" {
+		if _, err := a.DB.Exec("INSERT INTO uuid_bindings VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET user_id=excluded.user_id,outbound_id=excluded.outbound_id", v.Node, fresh.ID, n.OutboundID); err != nil {
+			fail(w, 500)
+			return
+		}
+	}
 	out, status := a.hostControl(r.Context(), hostPath, payload)
+	if status == 200 && (path == "restore" || path == "apply" && fresh.Role == "admin") {
+		a.DB.Exec("DELETE FROM uuid_bindings WHERE node_id=?", v.Node)
+	}
+	if status == 200 && fresh.Role != "admin" && path == "preview" {
+		// Host preview is for an authorized node, but its internal tag is private.
+		out["preview"] = map[string]string{"protocol": "授权出站", "server": "已授权节点"}
+	}
+
 	if status == 200 && (path == "preview" || path == "restore-preview") {
 		plan, _ := out["plan"].(string)
 		delete(out, "plan")

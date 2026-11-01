@@ -9,12 +9,14 @@ import (
 )
 
 type controlNonce struct {
-	Session string
-	User    int64
-	Node    string
-	Expires time.Time
-	Plan    string
-	Action  string
+	Session    string
+	User       int64
+	Node       string
+	Expires    time.Time
+	Plan       string
+	Action     string
+	Label      string
+	OutboundID string
 }
 
 const controlDisabled = "未配置受限控制 Agent、专门分享权限及经验证的安全热更新/出口校验机制；生产写入、连接探测与凭据导出均禁用"

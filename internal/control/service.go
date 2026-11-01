@@ -701,7 +701,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, item := range array(config["outbounds"]) {
 					current := object(item)
 					kind, _ := model.OutboundType(text(current["type"]))
-					if text(current["tag"]) == v.Outbound && kind == "actual" {
+					if text(current["tag"]) == v.Outbound && (kind == "actual" || text(current["type"]) == "selector" || text(current["type"]) == "urltest") {
 						o = candidateMap(canonical(current))
 						if v.AuthID == "" {
 							o["tag"] = managedTag(journalKey)

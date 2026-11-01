@@ -71,7 +71,7 @@ func UUIDCatalog(raw []byte) map[string]any {
 	for _, v := range array(config["outbounds"]) {
 		o := object(v)
 		kind, _ := model.OutboundType(text(o["type"]))
-		if kind == "actual" {
+		if kind == "actual" || text(o["type"]) == "selector" || text(o["type"]) == "urltest" {
 			outs = append(outs, map[string]string{"tag": text(o["tag"]), "type": text(o["type"])})
 		}
 	}
@@ -140,7 +140,7 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 		for _, v := range array(config["outbounds"]) {
 			o := object(v)
 			kind, _ := model.OutboundType(text(o["type"]))
-			if text(o["tag"]) == selected && kind == "actual" {
+			if text(o["tag"]) == selected && (kind == "actual" || text(o["type"]) == "selector" || text(o["type"]) == "urltest") {
 				found = true
 			}
 		}

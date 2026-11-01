@@ -2,7 +2,7 @@
 """Read-only config inventory and fail-closed supervisor of tzsingbox's own probes.
 Never writes, signals or restarts the production sing-box process.
 """
-import hashlib, json, os, pwd, signal, subprocess, time, secrets, socket
+import hashlib, json, os, pwd, signal, subprocess, time, secrets, socket, urllib.request, urllib.parse, ipaddress, copy
 from pathlib import Path
 from inbound_inventory import inbound_inventory
 
@@ -84,6 +84,37 @@ def runtime_identity():
     return pid, ticks
 
 
+def runtime_choices(config):
+    groups = [o for o in config.get('outbounds', []) if o.get('type') in ('selector', 'urltest')]
+    if not groups:
+        return {}
+    api = config.get('experimental', {}).get('clash_api', {})
+    address = api.get('external_controller', '')
+    url = urllib.parse.urlsplit('http://' + address)
+    if not url.hostname or not ipaddress.ip_address(socket.gethostbyname(url.hostname)).is_loopback:
+        raise OSError('dynamic path has no local runtime proof')
+    request = urllib.request.Request('http://' + address + '/proxies', headers={'Authorization': 'Bearer ' + api.get('secret', '')})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=3) as response:
+        data = json.loads(response.read(1 << 20))
+    choices = {}
+    for group in groups:
+        member = data.get('proxies', {}).get(group['tag'], {}).get('now')
+        if member not in group.get('outbounds', []):
+            raise OSError('dynamic path choice unknown')
+        choices[group['tag']] = member
+    return choices
+
+
+def pinned_outbounds(config, choices):
+    result = copy.deepcopy(config.get('outbounds', []))
+    for i, outbound in enumerate(result):
+        if outbound.get('type') in ('selector', 'urltest'):
+            member = choices[outbound['tag']]
+            result[i] = dict(type='selector', tag=outbound['tag'], outbounds=[member], default=member)
+    return result
+
+
 def main():
     child = None
     stopped = False
@@ -114,7 +145,9 @@ def main():
             runtime = runtime_identity()
             receipt_path=INVENTORY.parent / 'applied-exits.json'
             receipt_raw=receipt_path.read_bytes() if receipt_path.exists() else b''
-            inventory_version=(digest,hashlib.sha256(receipt_raw).hexdigest(),runtime)
+            config=json.loads(raw)
+            choices=runtime_choices(config)
+            inventory_version=(digest,hashlib.sha256(receipt_raw).hexdigest(),runtime,json.dumps(choices,sort_keys=True))
             if inventory_version != previous or child is None or child.poll() is not None:
                 stop_child()
                 config=json.loads(raw)
@@ -130,7 +163,7 @@ def main():
                     proxies.append(dict(tag=o['tag'],server='127.0.0.1',port=port,username=user,password=password,mode='singbox_route',eligible=True))
                     users.append(dict(username=user,password=password))
                     rules.append(dict(auth_user=[user],action='route',outbound=o['tag']))
-                probe=dict(log=dict(disabled=True),inbounds=[dict(type='socks',tag='path-probe',listen='127.0.0.1',listen_port=port,users=users)],outbounds=config.get('outbounds',[]),route=dict(rules=rules+[dict(action='reject')]))
+                probe=dict(log=dict(disabled=True),inbounds=[dict(type='socks',tag='path-probe',listen='127.0.0.1',listen_port=port,users=users)],outbounds=pinned_outbounds(config,choices),route=dict(rules=rules+[dict(action='reject')]))
                 for key in ('default_domain_resolver','auto_detect_interface','default_interface','default_mark','default_network_strategy','default_network_type','default_fallback_network_type','default_fallback_delay'):
                     if key in config.get('route',{}): probe['route'][key]=config['route'][key]
                 if config.get('dns'): probe['dns']=config['dns']
@@ -153,7 +186,7 @@ def main():
                     except OSError: time.sleep(.1)
                 if not ready: raise OSError('isolated probe unavailable')
                 # Do not publish paths from a file which changed during setup.
-                if CONFIG.read_bytes()!=raw or runtime_identity()!=runtime: raise OSError('configuration changed')
+                if CONFIG.read_bytes()!=raw or runtime_identity()!=runtime or runtime_choices(config)!=choices: raise OSError('configuration changed')
                 publish('probe-paths.json',dict(config_hash=digest,proxies=proxies))
                 data=inventory(config,True); data['config_hash']=digest
                 write_inventory(data); previous=inventory_version

@@ -62,6 +62,7 @@ const NodeControl=(()=>{
    const b=node('button','action-item','');b.type='button';b.append(UI.icon(action==='rename'?'change':action==='details'?'check':'restore'),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else if(action==='state')mutate(id,trigger);else policy(id,trigger)};
   }
 
+  if(me.role!=='admin') {const personal=node('button','action-item','个人与授权出站');personal.type='button';personal.onclick=()=>{m.force();PersonalOutbounds.open(id,trigger)};body.append(personal)}
   for(const [title,icon,action]of [['导入 Shadowrocket','import','import_shadowrocket'],['导入 v2rayN','import','import_v2rayn'],['复制节点链接','copy','copy'],['查看节点链接','copy','view'],['更换节点出站 IP','change','change'],['恢复原始出站','restore','restore']]){
    const b=node('button','action-item'+(action==='restore'?' danger':''));b.type='button';b.disabled=true;b.append(UI.icon(icon),node('span','',title));body.append(b);items.push([b,action]);if(me?.role!=='admin')b.hidden=!operations[action];b.onclick=()=>{if(b.disabled)return;m.force();if(action==='change'||action==='restore')edit(id,trigger,action==='restore');else share(id,action,trigger)}
   }

@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-//go:embed index.html app.js outbounds.js policy.js uuid.js inspect.js ui.js control.js grants.js charts.js style.css
+//go:embed index.html app.js personal.js outbounds.js policy.js uuid.js inspect.js ui.js control.js grants.js charts.js style.css
 var assets embed.FS
 
 func Files() fs.FS { return assets }

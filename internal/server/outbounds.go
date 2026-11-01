@@ -99,6 +99,7 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 			fail(w, 500)
 			return
 		}
+		a.DB.Exec("UPDATE outbound_registry SET name=? WHERE server=? AND tag=?", v.Name, a.ControlServer, v.Node.Tag)
 		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}

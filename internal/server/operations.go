@@ -13,6 +13,12 @@ func (a *App) operations(u store.User) map[string]bool {
 	for _, action := range userActions {
 		out[action] = a.controlPermission(u, action)
 	}
+	if u.Role != "admin" {
+		var n int
+		a.DB.QueryRow("SELECT count(*) FROM uuid_permissions WHERE user_id=? AND can_change=1", u.ID).Scan(&n)
+		out["change"] = n > 0
+		out["restore"] = n > 0
+	}
 	return out
 }
 

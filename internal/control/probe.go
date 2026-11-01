@@ -49,16 +49,41 @@ func (c *Controller) probe(o map[string]any) error {
 	if c.Hooks != nil && c.Hooks.Probe != nil {
 		return c.Hooks.Probe(o)
 	}
-	if text(o["type"]) == "direct" {
-		return c.probeClient(o)
-	}
-	pinned, e := pinPublic(o)
+	raw, e := os.ReadFile(c.Config.Config)
 	if e != nil {
 		return e
 	}
-	return c.probeClient(pinned)
+	config := candidateMap(raw)
+	selections, e := c.liveSelections(config, o)
+	if e != nil {
+		return e
+	}
+	outs, e := probeGraph(config, o, selections)
+	if e != nil {
+		return e
+	}
+	if e = c.probeGraphClient(outs, text(o["tag"]), config); e != nil {
+		return e
+	}
+	after, e := c.liveSelections(config, o)
+	if e != nil {
+		return e
+	}
+	beforeJSON, _ := json.Marshal(selections)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		c.lastIP = ""
+		return errors.New("动态成员在检测期间变化，请重新检测")
+	}
+	return nil
 }
+
 func (c *Controller) probeClient(o map[string]any) error {
+	out := candidateMap(canonical(o))
+	out["tag"] = "probe-out"
+	return c.probeGraphClient([]any{out}, "probe-out", nil)
+}
+func (c *Controller) probeGraphClient(outs []any, final string, source map[string]any) error {
 	dir, e := os.MkdirTemp(c.Config.State, "probe-")
 	if e != nil {
 		return e
@@ -71,12 +96,18 @@ func (c *Controller) probeClient(o map[string]any) error {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	secret := auth.Random()
-	out := map[string]any{}
-	for k, v := range o {
-		out[k] = v
+	conf := map[string]any{"log": map[string]any{"level": "error", "timestamp": false}, "inbounds": []any{map[string]any{"type": "socks", "tag": "probe-in", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": "probe", "password": secret}}}}, "outbounds": outs, "route": map[string]any{"final": final}}
+	if source != nil {
+		if dns, ok := source["dns"]; ok {
+			conf["dns"] = dns
+		}
+		for _, k := range []string{"default_domain_resolver", "auto_detect_interface", "default_interface", "default_mark"} {
+			if v, ok := object(source["route"])[k]; ok {
+				object(conf["route"])[k] = v
+			}
+		}
 	}
-	out["tag"] = "probe-out"
-	conf := map[string]any{"log": map[string]any{"level": "error", "timestamp": false}, "inbounds": []any{map[string]any{"type": "socks", "tag": "probe-in", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": "probe", "password": secret}}}}, "outbounds": []any{out}, "route": map[string]any{"final": "probe-out"}}
+
 	if e = atomicFile(filepath.Join(dir, "config.json"), canonical(conf), 0600); e != nil {
 		return e
 	}

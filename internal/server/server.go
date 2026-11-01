@@ -39,6 +39,7 @@ type bucket struct {
 	until time.Time
 }
 type App struct {
+	routeMu        sync.Mutex
 	policyCache    policyCache
 	DB             *store.Store
 	Prefix, Origin string
@@ -206,6 +207,25 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.history(w, r, u)
+		return
+	}
+	// Serialize configuration mutations with grants and revocations. Snapshots
+	// retain their own short lock and never wait for a network operation.
+	if strings.HasPrefix(path, "/api/control/") || strings.HasPrefix(path, "/api/admin/") || path == "/api/personal-outbounds" {
+		a.routeMu.Lock()
+		defer a.routeMu.Unlock()
+		u, _, e = a.DB.Session(c.Value)
+		if e != nil {
+			fail(w, 401)
+			return
+		}
+	}
+	if path == "/api/personal-outbounds" {
+		a.personalOutbounds(w, r, u)
+		return
+	}
+	if path == "/api/admin/uuid-permissions" {
+		a.uuidPermissions(w, r, u)
 		return
 	}
 	if strings.HasPrefix(path, "/api/control/") {
@@ -453,6 +473,29 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 		a.uuidAdmin(w, r, u, path)
 		return
 	}
+	if r.Method != "GET" && (path == "grants" || path == "operations" || path == "users" && (r.Method == "DELETE" || r.Method == "PATCH")) {
+		body, e := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if e != nil {
+			fail(w, 400)
+			return
+		}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		var target struct {
+			ID     int64 `json:"id"`
+			UserID int64 `json:"user_id"`
+		}
+		if json.Unmarshal(body, &target) != nil {
+			fail(w, 400)
+			return
+		}
+		if target.UserID != 0 {
+			target.ID = target.UserID
+		}
+		if err := a.restoreUserBindings(r.Context(), target.ID, ""); err != nil {
+			reply(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch path {
@@ -499,7 +542,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 				fail(w, 400)
 				return
 			}
-			_, err = a.DB.Exec("INSERT INTO users(name,role,hash) VALUES(?,'user',?)", v.Name, auth.Hash(*v.Password))
+			_, err = a.DB.Exec("INSERT INTO users(id,name,role,hash) SELECT coalesce(max(v),0)+1,?,'user',? FROM (SELECT id AS v FROM users UNION ALL SELECT owner AS v FROM outbound_registry)", v.Name, auth.Hash(*v.Password))
 		} else if r.Method == "PATCH" || r.Method == "DELETE" {
 			if r.Method == "PATCH" && (v.Password == nil) == (v.Disabled == nil) {
 				fail(w, 400)

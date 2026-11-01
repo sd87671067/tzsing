@@ -205,7 +205,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 		for _, x := range array(config["outbounds"]) {
 			o := object(x)
 			kind, _ := model.OutboundType(text(o["type"]))
-			if kind != "actual" {
+			if kind != "actual" && text(o["type"]) != "selector" && text(o["type"]) != "urltest" {
 				continue
 			}
 			items = append(items, map[string]any{"tag": text(o["tag"]), "protocol": text(o["type"]), "server": text(o["server"]), "port": o["server_port"], "tls": object(o["tls"])["enabled"] == true, "credentials_present": text(o["password"]) != "" || text(o["uuid"]) != "", "references": outboundRefs(config, text(o["tag"]))})
@@ -245,6 +245,29 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 		if e != nil {
 			fail(422, e.Error())
 			return
+		}
+		// Persist the same public address that was validated. A creator-controlled
+		// DNS name must not rebind to a management address after the preview.
+		if out != nil && text(out["type"]) != "direct" && c.Hooks == nil {
+			pinned, err := pinPublic(out)
+			if err != nil {
+				fail(422, err.Error())
+				return
+			}
+			config := candidateMap(candidate)
+			for _, v := range array(config["outbounds"]) {
+				o := object(v)
+				if text(o["tag"]) == text(out["tag"]) {
+					for k := range o {
+						delete(o, k)
+					}
+					for k, v := range pinned {
+						o[k] = v
+					}
+				}
+			}
+			out = pinned
+			candidate = canonical(config)
 		}
 		if e = c.check(candidate); e != nil {
 			fail(422, e.Error())
