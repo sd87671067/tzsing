@@ -27,7 +27,7 @@ func TestAuthenticationMappingNoDoubleCountingAndHotReload(t *testing.T) {
 		if v.Upload != nil {
 			total += *v.Upload
 		}
-		if v.AuthID != "" && (v.Upload != nil || v.Up != nil || v.Active != nil) {
+		if v.AuthID != "" && (v.Upload != nil || v.Up != nil || v.Active != nil || v.Egress != "" || v.EgressType != "") {
 			t.Fatal("unattested API identity guessed")
 		}
 	}

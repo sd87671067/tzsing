@@ -8,7 +8,7 @@ const NodeControl=(()=>{
  async function gate(id){return api('control/status?'+new URLSearchParams({node_id:id}))}
  async function share(id,action,trigger){
   const r=rows.get(id);if(!r)return;
-  const body=node('form','control-body'),notice=node('p','notice','仅在本次操作中读取连接凭据；请勿转发。'),label=node('label','','选择入站认证资料'),select=node('select'),confirm=node('button','primary',action==='view'?'查看节点链接':'复制并'+(action==='copy'?'使用':'从客户端剪贴板导入')),status=node('p','muted');label.append(select);body.append(notice,label,confirm,status);confirm.disabled=true;
+  const body=node('form','control-body'),notice=node('p','notice',r.t.accounting==='unavailable'?'仅读取当前身份的连接凭据；共享原有监听器，不代表独立流量或出站已验证。':'仅在本次操作中读取连接凭据；请勿转发。'),label=node('label','',r.t.accounting==='unavailable'?'当前认证身份资料':'选择入站认证资料'),select=node('select'),confirm=node('button','primary',action==='view'?'查看节点链接':'复制并'+(action==='copy'?'使用':'从客户端剪贴板导入')),status=node('p','muted');label.append(select);body.append(notice,label,confirm,status);confirm.disabled=true;
   let live=true,busy=false,secret='',shareGate=null;const m=UI.modal(action==='copy'?'复制节点链接':action==='view'?'查看节点链接':action==='import_shadowrocket'?'导入 Shadowrocket':'导入 v2rayN',body,{trigger,onClose:()=>{live=false;secret='';body.replaceChildren();if(editor===m)editor=null}});editor=m;
   try{const g=await gate(id);if(!live)return;if(!g.share||!g.actions?.[action])throw Error(g.reason||'此入站不支持该操作');shareGate=g;for(const p of g.profiles||[])select.add(new Option(p.label,p.id));confirm.disabled=!select.options.length;
    if(action.startsWith('import_'))text(notice,'使用客户端的“从剪贴板导入”功能。浏览器不会通过 URL 参数传递连接凭据；本页不能确认客户端是否已导入。');

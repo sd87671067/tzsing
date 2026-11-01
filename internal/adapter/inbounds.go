@@ -124,6 +124,9 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 		for _, id := range in.AuthIDs {
 			u := t
 			u.AuthID = id
+			u.Egress = ""
+			u.EgressType = ""
+			u.RouteReason = "认证身份的独立出站路径未验证"
 			u.Name = model.IdentityName(in.Tag, id)
 			u.Accounting = "unavailable"
 			if in.UserField == "inboundUser" {

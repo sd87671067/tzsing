@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"tzsingbox/internal/auth"
+	"tzsingbox/internal/model"
 	"tzsingbox/internal/store"
 )
 
@@ -78,11 +79,25 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return
 	}
 	server, tag, e := a.DB.Resolve(fresh, v.Node)
-	if e != nil || server != a.ControlServer || !strings.HasPrefix(tag, "inbound:") {
+	if e != nil || server != a.ControlServer || (!strings.HasPrefix(tag, "inbound:") && !strings.HasPrefix(tag, "identity:")) {
 		fail(w, 403)
 		return
 	}
-	tag = strings.TrimPrefix(tag, "inbound:")
+	authID := ""
+	if strings.HasPrefix(tag, "identity:") {
+		current, ok := a.currentInbound(fresh, v.Node)
+		if !ok || !model.ValidAuthID(current.AuthID) || model.IdentityName(current.InboundTag, current.AuthID) != tag {
+			fail(w, 403)
+			return
+		}
+		tag, authID = current.InboundTag, current.AuthID
+		if path != "status" && path != "share" {
+			fail(w, 403)
+			return
+		}
+	} else {
+		tag = strings.TrimPrefix(tag, "inbound:")
+	}
 	actions := map[string]bool{}
 	anyPermission := false
 	for _, action := range []string{"change", "restore", "copy", "import_shadowrocket", "import_v2rayn", "view"} {
@@ -112,6 +127,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return token
 	}
 	payload := map[string]string{"tag": tag}
+	if authID != "" {
+		payload["auth_id"] = authID
+	}
 	if path == "status" {
 		out, status := a.hostControl(r.Context(), "status", payload)
 		if status == 200 {

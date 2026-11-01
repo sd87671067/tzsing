@@ -55,6 +55,7 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
+	AuthID       string `json:"auth_id,omitempty"`
 	Source       string `json:"source,omitempty"`
 	PreviousIPv4 string `json:"previous_ipv4,omitempty"`
 	PreviousIPv6 string `json:"previous_ipv6,omitempty"`
@@ -332,6 +333,10 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(400, "请求无效")
 		return
 	}
+	if v.AuthID != "" && r.URL.Path != "/status" && r.URL.Path != "/share" {
+		fail(403, "认证身份的独立路由或检测尚不可用")
+		return
+	}
 	if r.URL.Path == "/diagnostics" || r.URL.Path == "/intel" {
 		if !c.mu.TryLock() {
 			fail(429, "已有检测或配置操作进行中")
@@ -365,6 +370,19 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(403, "目标不可用")
 		return
 	}
+	// Identity operations may export only that user's profile. Route operations
+	// remain closed until identity-specific routing and probing are implemented.
+	if v.AuthID != "" {
+		if r.URL.Path != "/status" && r.URL.Path != "/share" {
+			fail(403, "认证身份的独立路由应用尚不可用；禁止修改整个入站")
+			return
+		}
+		in, e = IdentityInbound(in, v.AuthID)
+		if e != nil {
+			fail(403, "认证身份已变化或不存在")
+			return
+		}
+	}
 	journals, e := c.journals()
 	if e != nil {
 		fail(503, "恢复快照不可用")
@@ -377,7 +395,12 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !c.Config.WriteEnabled && c.Config.DisabledReason != "" {
 			reason = c.Config.DisabledReason
 		}
-		respond(map[string]any{"apply": c.Config.WriteEnabled && supportsNode(in), "restore": c.Config.WriteEnabled && journals[v.Tag].Outbound != nil, "share": len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "preview": true, "reason": reason, "impact": "仅替换目标入站路由结果；保留认证、拒绝规则及其他入站配置"})
+		impact := "仅替换目标入站路由结果；保留认证、拒绝规则及其他入站配置"
+		if v.AuthID != "" {
+			impact = "仅当前认证身份的分享资料；不修改配置或监听器"
+			reason = "仅管理当前认证身份；独立流量与出站检测尚不可用，更换或恢复整个入站已禁用"
+		}
+		respond(map[string]any{"apply": v.AuthID == "" && c.Config.WriteEnabled && supportsNode(in), "restore": v.AuthID == "" && c.Config.WriteEnabled && journals[v.Tag].Outbound != nil, "share": len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "preview": v.AuthID == "", "reason": reason, "impact": impact})
 	case "/share":
 		link, e := Share(in, c.Config.Endpoints[v.Tag], v.Profile, v.Label)
 		if e != nil {

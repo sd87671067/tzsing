@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"tzsingbox/internal/model"
 )
 
 type Endpoint struct {
@@ -116,4 +117,35 @@ func Share(in map[string]any, ep Endpoint, profile, label string) (string, error
 		}
 	}
 	return "", ErrLink
+}
+
+// IdentityInbound selects one uniquely named authentication user without ever
+// adding a listener or trusting a client-supplied credential/profile identifier.
+func IdentityInbound(in map[string]any, id string) (map[string]any, error) {
+	if text(in["type"]) != "vless" || !model.ValidAuthID(id) {
+		return nil, ErrScope
+	}
+	var selected any
+	for _, value := range array(in["users"]) {
+		user := object(value)
+		name := text(user["name"])
+		if name == "" {
+			name = text(user["username"])
+		}
+		if name != "" && model.AuthID(name) == id {
+			if selected != nil {
+				return nil, ErrScope
+			}
+			selected = value
+		}
+	}
+	if selected == nil {
+		return nil, ErrScope
+	}
+	scoped := map[string]any{}
+	for k, v := range in {
+		scoped[k] = v
+	}
+	scoped["users"] = []any{selected}
+	return scoped, nil
 }

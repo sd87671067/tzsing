@@ -10,6 +10,7 @@ existed=p.exists()
 env={**os.environ,'DB_PATH':str(p),'URL_PREFIX':'/inboundtest','PUBLIC_ORIGIN':'https://127.0.0.1:33443','LISTEN':'127.0.0.1:33080','AGENT_LISTEN':'127.0.0.1:33443','TLS_CERT':os.environ['TZ_TEST_CERT'],'TLS_KEY':os.environ['TZ_TEST_KEY'],'GOMEMLIMIT':'128MiB','GOMAXPROCS':'2','CONTROL_SOCKET':str(d/'fixture.sock'),'CONTROL_SERVER':'fixture'}
 if not existed:subprocess.run([str(binary),'init-admin'],input=password,text=True,env=env,check=True,stdout=subprocess.DEVNULL)
 s=sqlite3.connect(p,timeout=10);s.execute("INSERT OR IGNORE INTO servers(id,name,token) VALUES('fixture','隔离服务器','synthetic')");s.commit()
+s.execute("INSERT OR IGNORE INTO control_permissions VALUES(1,'copy')");s.execute("INSERT OR IGNORE INTO control_permissions VALUES(1,'view')");s.commit()
 counts={};(d/'helper-counts.json').write_text('{}')
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*a):pass
@@ -19,6 +20,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
   if self.path=='/intel':
    answer={'source':source,'at':int(time.time()),'cached':False,'ip':'8.8.8.8','data':{'city':'Fixture City','country':'United States','country_code':'US','asn':'AS15169','org':'Fixture Network','geo_source':'IPPure 官方 API' if source=='ippure' else 'IPinfo'}}
    if tag=='b' and source=='ippure':answer={'source':source,'message':'IPPure 暂不可用，IPinfo 仍可使用'}
+  elif self.path=='/share':answer={'link':'vless://synthetic-fixture@example.org:443'}
+  elif self.path=='/status' and v.get('auth_id'):answer={'apply':False,'restore':False,'share':True,'profiles':[{'id':'identity-profile','label':'当前身份'}],'preview':False,'reason':'隔离身份分享'}
   elif self.path=='/status':answer={'actions':{},'apply':False,'restore':False,'share':False,'profiles':[],'preview':True,'reason':'隔离只读测试'}
   else:
    time.sleep(.5);check=lambda status,detail:{'status':status,'detail':detail}

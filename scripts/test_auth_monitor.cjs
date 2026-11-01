@@ -30,6 +30,16 @@ assert(base&&state&&process.env.TZ_SYNTHETIC_STAGE==='1','isolated synthetic sta
   await p.emulateMedia({reducedMotion:'reduce'});await p.waitForFunction(()=>Charts.reduced);await p.emulateMedia({reducedMotion:'no-preference'});
   const auth=tags.filter(t=>t.accounting==='unavailable');await p.locator('.card--node').filter({hasText:'认证身份 alice'}).locator('.node-number').click();await p.waitForFunction(()=>document.querySelector('#history-panel').open);await p.waitForFunction(()=>document.querySelector('#source-message').textContent.includes('无法确认'));assert((await p.locator('#detail-flow').textContent()).includes('没有可靠认证身份字段'));await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('#history-panel').open);
   await p.locator('.card--node .icon-button').first().click();await p.locator('.action-sheet').waitFor({state:'visible'});assert(!await p.locator('#history-panel').evaluate(e=>e.open));await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('.action-sheet'));
+  await p.locator('.card--node').filter({hasText:'认证身份 alice'}).locator('.icon-button').click();
+  await p.locator('.action-sheet').waitFor({state:'visible'});
+  await p.waitForFunction(()=>[...document.querySelectorAll('.action-item')].some(b=>b.textContent==='查看节点链接'&&!b.disabled));
+  assert(await p.getByRole('button',{name:'更换节点出站 IP',exact:true}).isDisabled());
+  await p.getByRole('button',{name:'查看节点链接',exact:true}).click();
+  await p.waitForFunction(()=>document.querySelector('.control-body select')?.options.length===1);
+  assert.equal(await p.locator('.control-body select option').count(),1);
+  await p.getByRole('button',{name:'查看节点链接',exact:true}).click();
+  await p.waitForFunction(()=>document.querySelector('.control-body textarea')?.value.includes('synthetic-fixture'));
+  await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('.control-body'));
   const name='auth-'+Date.now();await api(ctx,'admin/users','POST',{name,password:'isolated-validation'});uid=(await api(ctx,'admin/users')).find(u=>u.name===name).id;await api(ctx,'admin/grants','PUT',{user_id:uid,servers:['fixture'],grants:[{server:'fixture',tag:auth[0].grant_tag}]});
   const diag=await api(ctx,'admin/monitor-diagnostics?user_id='+uid);assert.equal(diag[0].counts.authorized,1);assert.equal(diag[0].counts.permission_filtered,5);
   user=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:320,height:844}});const up=await user.newPage();await login(up,name,'isolated-validation');await up.waitForFunction(()=>document.querySelectorAll('.card--node').length===1);assert.equal(await up.locator('.node-number').textContent(),'01');const uv=(await api(user,'snapshot'))[0];assert.equal(uv.report.host,null);assert(!uv.report.discovery&&!uv.diagnostics);assert(!uv.report.tags[0].auth_id&&!uv.report.tags[0].inbound_tag);
