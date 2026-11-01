@@ -1,0 +1,163 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"time"
+	"tzsingbox/internal/adapter"
+	"tzsingbox/internal/auth"
+	"tzsingbox/internal/collector"
+	"tzsingbox/internal/egress"
+	"tzsingbox/internal/model"
+)
+
+type Config struct {
+	ServerID      string         `json:"server_id"`
+	Token         string         `json:"token"`
+	URL           string         `json:"url"`
+	CA            string         `json:"ca"`
+	ClashURL      string         `json:"clash_url"`
+	ClashSecret   string         `json:"clash_secret"`
+	Proxies       []egress.Proxy `json:"proxies"`
+	Sample        int            `json:"sample_seconds"`
+	ExitSeconds   int            `json:"exit_seconds"`
+	InventoryFile string         `json:"inventory_file"`
+}
+
+func Run(ctx context.Context, path string) error {
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return e
+	}
+	var c Config
+	if e = json.Unmarshal(b, &c); e != nil {
+		return fmt.Errorf("invalid agent configuration")
+	}
+	u, e := url.Parse(c.URL)
+	if e != nil || u.Scheme != "https" || len(c.Token) != 43 {
+		return fmt.Errorf("agent requires HTTPS and token")
+	}
+	pool, e := x509.SystemCertPool()
+	if e != nil {
+		pool = x509.NewCertPool()
+	}
+	if c.CA != "" {
+		b, e = os.ReadFile(c.CA)
+		if e != nil {
+			return e
+		}
+		if !pool.AppendCertsFromPEM(b) {
+			return fmt.Errorf("invalid CA")
+		}
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}}, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	clash := adapter.New(c.ClashURL, c.ClashSecret)
+	if c.InventoryFile != "" {
+		inv, err := adapter.ReadInventory(c.InventoryFile)
+		if err != nil {
+			return fmt.Errorf("outbound inventory required but unavailable")
+		}
+		clash.SetInventory(inv)
+		if !inv.RoutesVerified {
+			c.Proxies = nil
+		}
+	}
+	host := &collector.Collector{}
+	det := egress.New()
+	det.SetProxies(c.Proxies)
+	go det.Run(ctx, c.Proxies, time.Duration(max(300, c.ExitSeconds))*time.Second)
+	epoch := auth.Random()
+	seq := int64(0)
+	sample := max(2, min(c.Sample, 60))
+	backoff := time.Second
+	var last []model.Tag
+	var checked time.Time
+	for {
+		if time.Since(checked) >= 30*time.Second {
+			checked = time.Now()
+			if c.InventoryFile != "" {
+				inv, err := adapter.ReadInventory(c.InventoryFile)
+				if err == nil {
+					clash.SetInventory(inv)
+					if inv.RoutesVerified {
+						det.SetProxies(c.Proxies)
+					} else {
+						det.SetProxies(nil)
+					}
+				} else {
+					log.Print("outbound inventory unavailable; retaining last inventory")
+				}
+			}
+		}
+		seq++
+		tags, err := clash.Collect()
+		message := ""
+		if err != nil {
+			message = "Clash API unavailable"
+			tags = clash.UnavailableTags()
+			if tags == nil {
+				tags = last
+			}
+			for i := range tags {
+				tags[i].State = "unknown"
+				tags[i].Up = nil
+				tags[i].Down = nil
+				tags[i].Upload = nil
+				tags[i].Download = nil
+				tags[i].Active = nil
+			}
+		} else {
+			last = append([]model.Tag(nil), tags...)
+		}
+		for i := range tags {
+			if tags[i].Kind == "actual" {
+				tags[i].IP = det.Get(tags[i].Name)
+			}
+		}
+		report := model.Report{ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}
+		b, e = json.Marshal(report)
+		if e != nil {
+			return e
+		}
+		req, e := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(b))
+		if e != nil {
+			return fmt.Errorf("invalid report URL")
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Content-Type", "application/json")
+		res, e := client.Do(req)
+		delay := time.Duration(sample) * time.Second
+		if e == nil {
+			if res.StatusCode == 200 {
+				var settings struct {
+					Sample int `json:"sample_seconds"`
+				}
+				if json.NewDecoder(res.Body).Decode(&settings) == nil && settings.Sample >= 2 && settings.Sample <= 60 {
+					sample = settings.Sample
+				}
+				backoff = time.Second
+			} else {
+				e = fmt.Errorf("report rejected status=%d", res.StatusCode)
+			}
+			res.Body.Close()
+		}
+		if e != nil {
+			log.Print("agent report unavailable; retrying")
+			delay = backoff
+			backoff = min(backoff*2, 30*time.Second)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+	}
+}

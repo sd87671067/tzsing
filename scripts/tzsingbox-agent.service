@@ -1,0 +1,34 @@
+[Unit]
+Description=tzsingbox read-only monitoring agent
+After=network-online.target docker.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=tzsingbox-agent
+Group=tzsingbox-agent
+ExecStart=/usr/local/lib/tzsingbox/tzsingbox agent
+Environment=AGENT_CONFIG=/etc/tzsingbox/agent.json
+Environment=IPINFO_TOKEN_FILE=/etc/tzsingbox/ipinfo-token
+Environment=IPINFO_CACHE_FILE=/var/lib/tzsingbox-agent/ipinfo-cache.json
+StateDirectory=tzsingbox-agent
+StateDirectoryMode=0700
+Environment=GOMEMLIMIT=64MiB
+Environment=GOMAXPROCS=1
+Restart=always
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=128M
+TasksMax=32
+UMask=0077
+[Install]
+WantedBy=multi-user.target

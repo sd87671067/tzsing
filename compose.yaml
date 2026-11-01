@@ -1,0 +1,36 @@
+name: tzsing
+services:
+  web:
+    build: .
+    image: tzsing:local
+    user: "65532:65532"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 80
+    mem_limit: 256m
+    environment:
+      URL_PREFIX: ${URL_PREFIX:?set URL_PREFIX}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}
+      TRUSTED_PROXY: ${TRUSTED_PROXY:-}
+      GOMEMLIMIT: 192MiB
+      GOMAXPROCS: "2"
+    ports:
+      - "127.0.0.1:18880:8080"
+      - "127.0.0.1:19443:8443"
+    volumes:
+      - ./data:/data
+      - ./secrets/agent.crt:/secrets/agent.crt:ro
+      - ./secrets/agent.key:/secrets/agent.key:ro
+    healthcheck:
+      test: [CMD, /tzsingbox, health]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
