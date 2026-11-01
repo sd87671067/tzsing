@@ -46,6 +46,7 @@ type App struct {
 	limits         map[string]bucket
 	sockets        map[int64]map[*websocket.Conn]bool
 	hashSem        chan struct{}
+	controlNonces  map[string]controlNonce
 	dummy          string
 }
 
@@ -139,6 +140,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.ws(w, r, u, c.Value)
 		return
 	}
+	if path == "/api/password" {
+		a.changePassword(w, r, u)
+		return
+	}
 	if path == "/api/me" && r.Method == "GET" {
 		reply(w, 200, map[string]any{"user": u, "csrf": csrf})
 		return
@@ -191,11 +196,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(path, "/api/control/") {
-		if u.Role != "admin" {
-			fail(w, 403)
-		} else {
-			reply(w, 501, map[string]string{"error": "monitoring-only: control module disabled"})
-		}
+		a.controlAPI(w, r, u, strings.TrimPrefix(path, "/api/control/"))
 		return
 	}
 	if strings.HasPrefix(path, "/api/admin/") {
@@ -251,7 +252,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 429)
 		return
 	}
-	if !valid.MatchString(v.Name) || len(v.Password) > 1024 {
+	if !valid.MatchString(v.Name) || !auth.ValidPassword(v.Password) {
 		fail(w, 400)
 		return
 	}
@@ -441,39 +442,44 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 			return
 		}
 		var v struct {
-			ID       int64  `json:"id"`
-			Name     string `json:"name"`
-			Password string `json:"password"`
-			Disabled bool   `json:"disabled"`
+			ID       int64   `json:"id"`
+			Name     string  `json:"name"`
+			Password *string `json:"password"`
+			Disabled *bool   `json:"disabled"`
 		}
 		if !read(w, r, &v) {
 			return
 		}
 		var err error
 		if r.Method == "POST" {
-			if !valid.MatchString(v.Name) || !auth.ValidPassword(v.Password) {
+			if !valid.MatchString(v.Name) || (v.Password == nil || !auth.ValidPassword(*v.Password)) {
 				fail(w, 400)
 				return
 			}
-			_, err = a.DB.Exec("INSERT INTO users(name,role,hash) VALUES(?,'user',?)", v.Name, auth.Hash(v.Password))
+			_, err = a.DB.Exec("INSERT INTO users(name,role,hash) VALUES(?,'user',?)", v.Name, auth.Hash(*v.Password))
 		} else if r.Method == "PATCH" || r.Method == "DELETE" {
+			if r.Method == "PATCH" && (v.Password == nil) == (v.Disabled == nil) {
+				fail(w, 400)
+				return
+			}
+
 			target, e := a.DB.User(v.ID)
 			if e != nil || target.Role == "admin" {
 				fail(w, 403)
+				return
+			}
+			if v.Password != nil && !auth.ValidPassword(*v.Password) {
+				fail(w, 400)
 				return
 			}
 			a.disconnect(v.ID)
 			a.DB.Exec("DELETE FROM sessions WHERE user_id=?", v.ID)
 			if r.Method == "DELETE" {
 				_, err = a.DB.Exec("DELETE FROM users WHERE id=?", v.ID)
-			} else if v.Password != "" {
-				if !auth.ValidPassword(v.Password) {
-					fail(w, 400)
-					return
-				}
-				_, err = a.DB.Exec("UPDATE users SET hash=? WHERE id=?", auth.Hash(v.Password), v.ID)
+			} else if v.Password != nil {
+				_, err = a.DB.Exec("UPDATE users SET hash=? WHERE id=?", auth.Hash(*v.Password), v.ID)
 			} else {
-				_, err = a.DB.Exec("UPDATE users SET disabled=? WHERE id=?", v.Disabled, v.ID)
+				_, err = a.DB.Exec("UPDATE users SET disabled=? WHERE id=?", *v.Disabled, v.ID)
 			}
 		} else {
 			fail(w, 405)

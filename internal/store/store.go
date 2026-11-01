@@ -82,6 +82,9 @@ COMMIT;`)
 	return s, nil
 }
 func (s *Store) Init(name, password string) error {
+	if !auth.ValidPassword(password) {
+		return fmt.Errorf("password must be nonempty Unicode")
+	}
 	var n int
 	s.QueryRow("SELECT count(*) FROM users").Scan(&n)
 	if n != 0 {

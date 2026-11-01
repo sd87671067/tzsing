@@ -20,7 +20,7 @@ chown root:65532 secrets secrets/agent.key secrets/agent.crt
 chmod 750 secrets
 chmod 640 secrets/agent.key secrets/agent.crt
 docker compose build web
-IFS= read -r -s -p 'Administrator password (14–256 Unicode characters): ' tz_admin_password
+IFS= read -r -s -p 'Administrator password (any nonempty Unicode; spaces preserved): ' tz_admin_password
 printf '\n'
 printf '%s' "$tz_admin_password" | docker compose run --rm -T --no-deps web init-admin
 unset tz_admin_password

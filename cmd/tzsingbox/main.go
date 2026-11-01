@@ -59,13 +59,16 @@ func run() error {
 	}
 	defer db.Close()
 	if mode == "init-admin" {
-		b, e := io.ReadAll(io.LimitReader(os.Stdin, 1025))
+		b, e := io.ReadAll(io.LimitReader(os.Stdin, (64<<10)+1))
 		if e != nil {
 			return e
 		}
-		password := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+		if len(b) > 64<<10 {
+			return fmt.Errorf("password input exceeds 64 KiB resource limit")
+		}
+		password := string(b)
 		if !auth.ValidPassword(password) {
-			return fmt.Errorf("password must be 14..256 Unicode characters and at most 1024 bytes")
+			return fmt.Errorf("password must be nonempty valid Unicode (stdin is used exactly)")
 		}
 		return db.Init(env("ADMIN_NAME", "admin"), password)
 	}

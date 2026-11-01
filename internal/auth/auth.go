@@ -13,8 +13,7 @@ import (
 
 // Passwords are opaque UTF-8: no trimming, normalization or character classes.
 func ValidPassword(p string) bool {
-	n := utf8.RuneCountInString(p)
-	return utf8.ValidString(p) && n >= 14 && n <= 256 && len(p) <= 1024
+	return p != "" && utf8.ValidString(p)
 }
 
 func Random() string {
