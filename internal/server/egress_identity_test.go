@@ -66,7 +66,7 @@ func TestUUIDInspectSelectedPathAndPermissionRevocation(t *testing.T) {
 		t.Fatal("hidden internal identity leaked")
 	}
 	payload["path_index"] = 9
-	call(200)
+	call(422)
 	if calls.Load() != 1 {
 		t.Fatal("invalid path reached helper")
 	}

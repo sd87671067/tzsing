@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS counters(server TEXT NOT NULL,tag TEXT NOT NULL,epoch
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
 INSERT OR IGNORE INTO settings VALUES('sample_seconds',2),('retention_days',30),('show_raw_tag',0),('show_expiry',0),('show_quota',1);
 CREATE TABLE IF NOT EXISTS control_permissions(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,action TEXT NOT NULL CHECK(action IN ('change','restore','copy','import_shadowrocket','import_v2rayn','view')),PRIMARY KEY(user_id,action));
+CREATE TABLE IF NOT EXISTS user_operations(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,action TEXT NOT NULL CHECK(action IN ('change','rename','copy','import_shadowrocket','import_v2rayn')),PRIMARY KEY(user_id,action));
 CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 INSERT OR IGNORE INTO preferences VALUES('default_node_name','节点');
 CREATE TABLE IF NOT EXISTS identity_migrations(server TEXT NOT NULL,legacy TEXT NOT NULL,current TEXT NOT NULL,PRIMARY KEY(server,legacy),UNIQUE(server,current));

@@ -148,7 +148,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/api/me" && r.Method == "GET" {
-		reply(w, 200, map[string]any{"user": u, "csrf": csrf})
+		reply(w, 200, map[string]any{"user": u, "csrf": csrf, "operations": a.operations(u)})
 		return
 	}
 	if path == "/api/logout" && r.Method == "POST" {
@@ -292,9 +292,14 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "tz_session", Value: token, Path: a.Prefix + "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
-	reply(w, 200, map[string]any{"user": u, "csrf": csrf})
+	reply(w, 200, map[string]any{"user": u, "csrf": csrf, "operations": a.operations(u)})
 }
 func (a *App) disconnect(id int64) {
+	for key, n := range a.controlNonces {
+		if n.User == id {
+			delete(a.controlNonces, key)
+		}
+	}
 	for c := range a.sockets[id] {
 		c.Close()
 	}
@@ -519,6 +524,9 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 		}
 		a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "user_change")
 		reply(w, 200, map[string]bool{"ok": true})
+	case "operations":
+		a.operationAdmin(w, r, u)
+		return
 	case "server-grants":
 		if r.Method != "GET" {
 			fail(w, 405)

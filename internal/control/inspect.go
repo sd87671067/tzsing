@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 	"tzsingbox/internal/adapter"
 	"tzsingbox/internal/agent"
@@ -149,95 +148,73 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 		send(200, out)
 		return
 	}
-	if e := c.check(raw); e == nil {
-		result.Config = egress.Check{Status: "ok", Detail: "当前 sing-box 配置通过只读 check 校验"}
-	} else {
-		result.Config = egress.Check{Status: "error", Detail: "当前配置未通过只读校验"}
+
+	if !validPath {
+		fail(422, "无法指定该节点的实际出站")
+		return
 	}
-	port, _ := in["listen_port"].(float64)
-	host := text(in["listen"])
-	if host == "" || host == "::" || host == "0.0.0.0" {
-		host = "127.0.0.1"
+	network := egress.CheckPath(ctx, path)
+	latest, e := os.ReadFile(c.Config.Config)
+	if e != nil || digest(latest) != digest(raw) {
+		fail(409, "路由已变化，请重新检测")
+		return
 	}
-	typ := text(in["type"])
-	if port > 0 && port <= 65535 && typ != "hysteria" && typ != "hysteria2" && typ != "tuic" && localAddress(host) {
-		start := time.Now()
-		conn, e := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-		if e == nil {
-			conn.Close()
-			result.Listen = egress.Check{Status: "ok", Detail: "配置的本机 TCP 端口接受连接；不代表公网可达", Milliseconds: time.Since(start).Milliseconds()}
-		} else {
-			result.Listen = egress.Check{Status: "error", Detail: "配置的本机 TCP 端口未接受连接"}
-			if ne, ok := e.(net.Error); ok && ne.Timeout() {
-				result.Listen.Status = "timeout"
-			}
-		}
-	}
-	if v.AuthID == "" && result.Config.Status == "ok" && result.Listen.Status == "ok" && supportsNode(in) {
-		start := time.Now()
-		e := c.probeNode(config, v.Tag)
-		if e == nil {
-			result.Handshake = egress.Check{Status: "ok", Detail: "使用配置内测试凭据完成真实协议握手及 HTTPS 请求；仅代表所测凭据", Milliseconds: time.Since(start).Milliseconds()}
-		} else {
-			result.Handshake = egress.Check{Status: "unverified", Detail: "测试凭据的协议与 HTTPS 联合请求未完成；可能受用户路由、凭据或上游限制，不能据此判定所有用户异常", Milliseconds: time.Since(start).Milliseconds()}
-		}
-	}
-	if validPath {
-		network := egress.CheckPath(ctx, path)
-		result.Network = &network
-		if network.Successes > 0 {
-			if c.inspectExits == nil {
-				c.inspectExits = map[string]observedExit{}
-			}
-			if len(c.inspectExits) >= 512 {
-				for k := range c.inspectExits {
-					delete(c.inspectExits, k)
-					break
-				}
-			}
-			c.inspectExits[v.Tag+":"+v.AuthID+":"+v.Outbound] = observedExit{hash: digest(raw), at: time.Now(), ipv4: network.IPv4.IP, ipv6: network.IPv6.IP}
-		}
-		if network.Successes == 0 {
-			result.Path.Status = "error"
-			result.Path.Detail = "指定路径未完成固定目标 HTTPS 请求"
-			if network.IPv4.Status == "timeout" || network.IPv6.Status == "timeout" {
-				result.Path.Status = "timeout"
-			}
-		}
-		pairs := [][2]string{{v.PreviousIPv4, network.IPv4.IP}, {v.PreviousIPv6, network.IPv6.IP}}
-		compared, changed := false, false
-		for _, pair := range pairs {
-			if pair[0] != "" && pair[1] != "" {
-				compared = true
-				changed = changed || pair[0] != pair[1]
-			}
-		}
-		if compared {
-			result.Change = egress.Check{Status: "ok", Detail: "与已有缓存的同地址族出口一致"}
-			if changed {
-				result.Change = egress.Check{Status: "ok", Detail: "检测到出口 IP 变化；来源信息需按新 IP 重新查询"}
-			}
-		}
-	}
-	if v.AuthID != "" && validPath {
-		clash := adapter.New(ac.ClashURL, ac.ClashSecret)
+	// Recheck selector resolution after network work, never trust a stale proof.
+	if v.AuthID != "" {
 		inv, e := adapter.ReadInventory(ac.InventoryFile)
 		if e != nil {
-			validPath = false
-		} else {
-			clash.SetInventory(inv)
-			_, e = clash.IdentityPath(v.Tag, v.AuthID, v.Outbound, v.RouteVersion)
-			validPath = e == nil
+			fail(409, "路径证明已失效")
+			return
+		}
+		clash := adapter.New(ac.ClashURL, ac.ClashSecret)
+		clash.SetInventory(inv)
+		if _, e = clash.IdentityPath(v.Tag, v.AuthID, v.Outbound, v.RouteVersion); e != nil {
+			fail(409, "路由已变化，请重新检测")
+			return
 		}
 	}
-	latest, e := os.ReadFile(c.Config.Config)
-	if e != nil || digest(latest) != digest(raw) || (v.AuthID != "" && !validPath) {
-		result.Path = egress.Check{Status: "unknown", Detail: "检测期间配置已变化，结果不再代表当前路径"}
-		result.Network = nil
-		result.Outbound = ""
+	if network.Successes == 0 {
+		c.audit("exit_http_failed", v.Tag)
+		fail(502, "出口 HTTPS 检测失败，保留上次缓存")
+		return
 	}
-	send(200, result)
+	if c.inspectExits == nil {
+		c.inspectExits = map[string]observedExit{}
+	}
+	if len(c.inspectExits) >= 512 {
+		for k := range c.inspectExits {
+			delete(c.inspectExits, k)
+			break
+		}
+	}
+	c.inspectExits[v.Tag+":"+v.AuthID+":"+v.Outbound] = observedExit{hash: digest(raw), at: time.Now(), ipv4: network.IPv4.IP, ipv6: network.IPv6.IP}
+	ip := model.Exit{IPv4: network.IPv4.IP, IPv6: network.IPv6.IP, Verified: true, Updated: time.Now().Unix(), Attempted: time.Now().Unix(), Source: "指定出站 HTTPS", Path: t.Egress + "@" + v.RouteVersion}
+	expected := ip.IPv4
+	if expected == "" {
+		expected = ip.IPv6
+	}
+	info := egress.LookupSource(ctx, path, "ipinfo", expected, digest(raw)+"@"+t.Egress)
+	if info.Data != nil {
+		geo := *info.Data
+		geo.IPv4 = ip.IPv4
+		geo.IPv6 = ip.IPv6
+		geo.Verified = true
+		geo.Updated = ip.Updated
+		geo.Attempted = ip.Attempted
+		geo.Source = ip.Source
+		geo.Path = ip.Path
+		ip = geo
+	}
+	// Metadata lookup also uses the path; a config change invalidates its result.
+	latest, e = os.ReadFile(c.Config.Config)
+	if e != nil || digest(latest) != digest(raw) {
+		fail(409, "路由已变化，请重新检测")
+		return
+	}
+	c.audit("exit_http_success", v.Tag)
+	send(200, map[string]any{"at": ip.Updated, "outbound": t.Egress, "network": network, "ip": ip})
 }
+
 func localAddress(host string) bool {
 	ip := net.ParseIP(host)
 	if ip == nil {

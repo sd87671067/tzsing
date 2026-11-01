@@ -31,7 +31,7 @@ func TestInboundInspectPermissionScopeCSRFRateAndRevocation(t *testing.T) {
 		calls.Add(1)
 		var v map[string]string
 		json.NewDecoder(r.Body).Decode(&v)
-		if v["tag"] != "a" || v["source"] != "ipinfo" || len(v) != 2 {
+		if v["tag"] != "a" || v["source"] != "ipinfo" || len(v) != 3 {
 			t.Error("untrusted target reached helper", v)
 		}
 		if revoke.Load() {

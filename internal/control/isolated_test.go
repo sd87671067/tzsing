@@ -171,7 +171,7 @@ func TestIsolatedSingBoxSwitchAndRollback(t *testing.T) {
 	count := 0
 	c.Hooks.Healthy = func(m map[string]any) error {
 		count++
-		if count == 1 {
+		if count == 2 {
 			return errors.New("injected failure after actual restart")
 		}
 		return healthy(m)
@@ -180,7 +180,7 @@ func TestIsolatedSingBoxSwitchAndRollback(t *testing.T) {
 		t.Fatal("health failure accepted")
 	}
 	after, _ = os.ReadFile(path)
-	if digest(after) != digest(currentBase) || count != 2 {
+	if digest(after) != digest(currentBase) || count != 3 {
 		t.Fatal("real rollback not verified")
 	}
 	if e = healthy(main); e != nil {

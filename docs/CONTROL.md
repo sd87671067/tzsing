@@ -4,7 +4,7 @@ Web/监控 Agent 不挂载生产 sing-box 配置。独立宿主机控制器 `tzs
 
 ## 独立授权与按需分享
 
-管理员角色之外还必须具备 `control_permissions` 中的独立权限：`copy`、`import_shadowrocket`、`import_v2rayn`、`view`、`change`、`restore`。普通用户即使错误取得权限行也不能调用。权限不自动授予新增管理员；由宿主机操作者通过 `grant-control` 命令明确配置：
+管理员角色之外还必须具备 `control_permissions` 中的独立权限：`copy`、`import_shadowrocket`、`import_v2rayn`、`view`、`change`、`restore`。普通用户不会使用该管理员权限表；仅通过独立的 `user_operations` 与具体节点授权访问自己的 UUID。详见 [逐 UUID 操作说明](admin-operations.md)。权限不自动授予新增管理员；由宿主机操作者通过 `grant-control` 命令明确配置：
 
 ```sh
 CONTROL_ADMIN=your-admin CONTROL_ACTIONS=copy,import_shadowrocket,import_v2rayn,view,change,restore DB_PATH=/your/data/tzsingbox.db /your/tzsingbox grant-control
@@ -16,7 +16,7 @@ CONTROL_ADMIN=your-admin CONTROL_ACTIONS=copy,import_shadowrocket,import_v2rayn,
 
 Shadowrocket、v2rayN 通过客户端的“从剪贴板导入”使用标准单节点 URI；不通过 URL 查询参数携带凭据，不伪造不通用的应用深链。浏览器复制后提示“复制成功”，不能证明客户端已经导入。未安装原生客户端时，只能核验 URI 规范和浏览器交互，不能宣称原生客户端实测通过。2022 密码按 SIP002 使用百分号编码的 userinfo。
 
-监控 API/WS 不返回分享资料。只有管理员主动操作后，受保护 POST 才按需返回单份连接凭据。查看窗口关闭或撤权后移除内容；敏感复制失败时不自动展开链接。浏览器和剪贴板必然接触用户主动请求的必要凭据，不承诺浏览器绝对保密。
+监控 API/WS 不返回分享资料。只有具备对应操作和节点权限的用户主动操作后，受保护 POST 才按需返回单份连接凭据。查看窗口关闭或撤权后移除内容；敏感复制失败时不自动展开链接。浏览器和剪贴板必然接触用户主动请求的必要凭据，不承诺浏览器绝对保密。
 
 ## 出站更换与实际恢复
 
@@ -36,7 +36,7 @@ Shadowrocket、v2rayN 通过客户端的“从剪贴板导入”使用标准单�
 4. 失败恢复原文件、重启并验证服务；快照持久化失败同样回滚。写入启用时中断事务由控制器下次启动恢复；写入关闭时保留事务并拒绝启动，不触碰生产配置；若检测到外部配置冲突则停止并保留备份，不能盲目覆盖。
 5. 保存最小恢复快照和脱敏审计；审计轮换限制为两份约 4 MiB。原配置备份保留，不自动清理用户回滚资料。成功出口证明绑定准确配置哈希；更换/恢复或依赖变化不能复用旧路径的验证缓存。
 
-仅经过路径验证的 Shadowsocks 或 TCP REALITY VLESS 入站允许写入。`write_enabled` 默认为 false；操作者完成隔离验证和明确授权后才能启用。配置控制器不与第三方工具共享写锁；外部编辑在哈希检查中冲突会被拒绝，操作者仍应避免同时在其他工具中编辑。不能保证跨独立、不配合锁的写入者实现全局事务。
+仅经过路径验证的 Shadowsocks 或 TCP REALITY VLESS 入站允许写入。`write_enabled` 默认为 false；只有完成隔离验证、明确授权以及全部写入者协调后才能启用。外部工具不参与同一锁时必须保持关闭；哈希 CAS 不能代替跨写入者独占。当前 sbbot 不参与该锁，生产没有启用写入。
 
 根配置示意（只存在宿主机，不能提交真实配置）：
 

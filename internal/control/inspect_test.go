@@ -31,16 +31,11 @@ func TestReadonlyInspectionLocalListenerUnknownPathAndLimits(t *testing.T) {
 		return w
 	}
 	out := request("/diagnostics", `{"tag":"a"}`)
-	if out.Code != 200 {
+	if out.Code != 422 || !strings.Contains(out.Body.String(), "无法指定") {
 		t.Fatal(out.Code, out.Body.String())
 	}
-	var d diagnostics
-	json.Unmarshal(out.Body.Bytes(), &d)
-	if d.Listen.Status != "ok" || d.Public.Status != "unverified" || d.Path.Status != "unknown" || d.Network != nil || d.Config.Status != "ok" {
-		t.Fatal(d)
-	}
-	if checks != 1 || activated != 0 {
-		t.Fatal("write operation during readonly inspection")
+	if checks != 0 || activated != 0 {
+		t.Fatal("HTTP exit checks must not inspect listener or restart")
 	}
 	after, _ := os.ReadFile(path)
 	if string(after) != string(raw) {

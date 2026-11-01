@@ -60,6 +60,13 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	// multi-exit identity. Reports persist the full path list in SQLite unchanged.
 	for i := range t.Egresses {
 		path := &t.Egresses[i]
+		var cached []byte
+		if s.QueryRow("SELECT data FROM exit_cache WHERE server=? AND tag=?", server, raw+"|egress:"+path.Tag).Scan(&cached) == nil {
+			var ip model.Exit
+			if json.Unmarshal(cached, &ip) == nil && ip.Verified && ip.Path == path.Tag+"@"+t.RouteVersion && (path.IP == nil || (ip.Updated > path.IP.Updated || (ip.Updated == path.IP.Updated && ip.Attempted > path.IP.Attempted))) {
+				path.IP = &ip
+			}
+		}
 		if path.IP != nil {
 			ip := *path.IP
 			path.IP = &ip

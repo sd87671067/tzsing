@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,8 +51,12 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		fail(w, 429)
 		return
 	}
+	if _, err := a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "node_inspect_"+v.Action+":"+v.Node); err != nil {
+		fail(w, 500)
+		return
+	}
 	routePaths := t.Egresses
-	payload := map[string]string{"tag": strings.TrimPrefix(tag, "inbound:"), "source": v.Source}
+	payload := map[string]string{"tag": strings.TrimPrefix(tag, "inbound:"), "source": v.Source, "route_version": t.RouteVersion}
 	if strings.HasPrefix(tag, "identity:") {
 		// Resolve permission with the caller first; raw route identity is server-owned.
 		raw, exists := a.currentInbound(store.User{Role: "admin"}, v.Node)
@@ -60,7 +65,7 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 			return
 		}
 		if v.PathIndex < 0 || v.PathIndex >= len(raw.Egresses) {
-			reply(w, 200, map[string]any{"message": "路径待检测", "at": time.Now().Unix()})
+			reply(w, 422, map[string]string{"error": "无法指定实际出站"})
 			return
 		}
 		routePaths = raw.Egresses
@@ -110,7 +115,41 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		reply(w, 409, map[string]string{"error": "路由已变化，请重新检测"})
 		return
 	}
+
+	if v.Action == "diagnostics" {
+		outbound := payload["outbound"]
+		if outbound == "" {
+			outbound = t.Egress
+		}
+		var ip model.Exit
+		if status == 200 {
+			b, _ := json.Marshal(out["ip"])
+			json.Unmarshal(b, &ip)
+		} else {
+			for _, p := range routePaths {
+				if p.Tag == outbound && p.IP != nil {
+					ip = *p.IP
+				}
+			}
+			if ip.Verified {
+				ip.Error = "上次检测失败，显示缓存"
+				ip.Attempted = time.Now().Unix()
+			}
+		}
+		if ip.Verified && outbound != "" && ip.Path == outbound+"@"+t.RouteVersion {
+			b, _ := json.Marshal(ip)
+			_, err := a.DB.Exec("INSERT INTO exit_cache(server,tag,data) VALUES(?,?,?) ON CONFLICT(server,tag) DO UPDATE SET data=excluded.data", server, tag+"|egress:"+outbound, b)
+			if err != nil {
+				fail(w, 500)
+				return
+			}
+		}
+	}
+
 	if fresh.Role != "admin" && a.DB.Setting("show_raw_tag", 0) == 0 {
+		if ip, ok := out["ip"].(map[string]any); ok {
+			delete(ip, "path")
+		}
 		if raw, ok := out["outbound"].(string); ok && raw != "" {
 			out["outbound"] = "关联出口（Tag 未公开）"
 			if path, ok := out["path"].(map[string]any); ok {

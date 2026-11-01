@@ -15,8 +15,19 @@ import (
 )
 
 func (a *App) controlPermission(u store.User, action string) bool {
-	if u.Role != "admin" || u.Disabled {
+	if u.Disabled {
 		return false
+	}
+	if u.Role != "admin" {
+		if action == "restore" || action == "view" {
+			return false
+		}
+		var n int
+		a.DB.QueryRow("SELECT count(*) FROM user_operations WHERE user_id=? AND action=?", u.ID, action).Scan(&n)
+		return n == 1
+	}
+	if action == "rename" {
+		return true
 	}
 	var n int
 	a.DB.QueryRow("SELECT count(*) FROM control_permissions WHERE user_id=? AND action=?", u.ID, action).Scan(&n)
@@ -55,7 +66,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return
 	}
 	fresh, _, e := a.DB.Session(cookie.Value)
-	if e != nil || fresh.Role != "admin" {
+	if e != nil || fresh.Disabled {
 		fail(w, 403)
 		return
 	}
@@ -85,18 +96,22 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	}
 	authID := ""
 	if strings.HasPrefix(tag, "identity:") {
-		current, ok := a.currentInbound(fresh, v.Node)
+		current, ok := a.currentInbound(store.User{Role: "admin"}, v.Node)
 		if !ok || !model.ValidAuthID(current.AuthID) || model.IdentityName(current.InboundTag, current.AuthID) != tag {
 			fail(w, 403)
 			return
 		}
 		tag, authID = current.InboundTag, current.AuthID
-		if path != "status" && path != "share" {
+		if path != "status" && path != "share" && path != "preview" && path != "apply" && path != "restore-preview" && path != "restore" {
 			fail(w, 403)
 			return
 		}
 	} else {
 		tag = strings.TrimPrefix(tag, "inbound:")
+	}
+	if fresh.Role != "admin" && authID == "" {
+		fail(w, 403)
+		return
 	}
 	actions := map[string]bool{}
 	anyPermission := false
@@ -174,6 +189,13 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			return
 		}
 		payload["link"] = v.Link
+		if v.Action != "" {
+			if fresh.Role != "admin" || (v.Action != "enable" && v.Action != "disable" && v.Action != "delete") {
+				fail(w, 403)
+				return
+			}
+			payload["action"] = v.Action
+		}
 	case "restore-preview":
 		if n.Plan != "" {
 			fail(w, 409)
@@ -211,7 +233,8 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	}
 	if path == "share" && status == 200 {
 		latest, _, err := a.DB.Session(cookie.Value)
-		if err != nil || !a.controlPermission(latest, permission) {
+		_, _, resolveErr := a.DB.Resolve(latest, v.Node)
+		if err != nil || resolveErr != nil || !a.controlPermission(latest, permission) {
 			fail(w, 403)
 			return
 		}

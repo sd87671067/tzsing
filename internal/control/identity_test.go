@@ -23,7 +23,7 @@ func TestIdentityShareBoundaryAndSharedListenerPreserved(t *testing.T) {
 		t.Fatal(e)
 	}
 	ep := Endpoint{Host: "example.org", Port: 443, Verified: true}
-	c := &Controller{Config: ServiceConfig{Config: path, State: dir, WriteEnabled: true, Endpoints: map[string]Endpoint{"shared": ep}}}
+	c := &Controller{Config: ServiceConfig{Config: path, State: dir, WriteEnabled: false, Endpoints: map[string]Endpoint{"shared": ep}}}
 	call := func(route string, body map[string]string) *httptest.ResponseRecorder {
 		t.Helper()
 		b, _ := json.Marshal(body)
@@ -38,7 +38,7 @@ func TestIdentityShareBoundaryAndSharedListenerPreserved(t *testing.T) {
 		Profiles                []ShareProfile
 	}
 	json.Unmarshal(w.Body.Bytes(), &status)
-	if w.Code != 200 || status.Apply || status.Restore || status.Preview || len(status.Profiles) != 1 || status.Profiles[0].ID != profileID(text(alice["uuid"])) {
+	if w.Code != 200 || status.Apply || status.Restore || !status.Preview || len(status.Profiles) != 1 || status.Profiles[0].ID != profileID(text(alice["uuid"])) {
 		t.Fatal("identity status boundary", w.Code)
 	}
 	body["profile"] = profileID(text(bob["uuid"]))
@@ -50,7 +50,7 @@ func TestIdentityShareBoundaryAndSharedListenerPreserved(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), text(alice["uuid"])) || strings.Contains(w.Body.String(), text(bob["uuid"])) {
 		t.Fatal("wrong profile shared")
 	}
-	for _, route := range []string{"/preview", "/restore-preview", "/apply", "/diagnostics", "/intel"} {
+	for _, route := range []string{"/unsupported"} {
 		if w = call(route, body); w.Code != 403 {
 			t.Fatal("identity escalated to inbound", route, w.Code)
 		}

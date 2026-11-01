@@ -8,6 +8,10 @@ import (
 )
 
 func (a *App) nodeSettings(w http.ResponseWriter, r *http.Request, u store.User, admin bool) {
+	if !admin && !a.controlPermission(u, "rename") {
+		fail(w, 403)
+		return
+	}
 	if admin && r.Method == "PATCH" {
 		var v struct {
 			ID   string `json:"node_id"`
@@ -117,8 +121,12 @@ func (a *App) nodeSettings(w http.ResponseWriter, r *http.Request, u store.User,
 	} else {
 		_, err = tx.Exec("INSERT INTO aliases VALUES(?,?,?) ON CONFLICT(user_id,node_id) DO UPDATE SET name=excluded.name", u.ID, v.ID, v.Name)
 	}
-	if err == nil && admin {
-		_, err = tx.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "node_global_name_quota: "+v.ID)
+	if err == nil {
+		event := "node_personal_name:" + v.ID
+		if admin {
+			event = "node_global_name_quota:" + v.ID
+		}
+		_, err = tx.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", event)
 	}
 	if err == nil {
 		err = tx.Commit()

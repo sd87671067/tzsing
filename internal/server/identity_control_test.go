@@ -62,8 +62,8 @@ func TestIdentityControlUsesCurrentReportAndRejectsInboundMutation(t *testing.T)
 	for _, path := range []string{"preview", "apply", "restore-preview", "restore"} {
 		r = f.req(t, "POST", "/api/control/"+path, payload, f.admin, f.acs)
 		r.Body.Close()
-		if r.StatusCode != 403 {
-			t.Fatal("inbound mutation accepted", path, r.StatusCode)
+		if r.StatusCode != 409 {
+			t.Fatal("missing/reused nonce accepted", path, r.StatusCode)
 		}
 	}
 	if calls != 2 {

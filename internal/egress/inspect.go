@@ -56,7 +56,7 @@ func publicIP(s string) bool {
 	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast()
 }
 
-// Fixed HTTPS targets, two attempts per family, no caller-supplied host or URL.
+// Fixed HTTPS targets, one attempt per family, no caller-supplied host or URL.
 func CheckPath(ctx context.Context, p Proxy) PathResult {
 	result := PathResult{}
 	client, closeClient, err := PathClient(p)
@@ -76,7 +76,7 @@ func CheckPath(ctx context.Context, p Proxy) PathResult {
 		success := 0
 		var elapsed int64
 		var timedout bool
-		for n := 0; n < 2; n++ {
+		for n := 0; n < 1; n++ {
 			result.Attempts++
 			start := time.Now()
 			var v struct {
@@ -92,10 +92,10 @@ func CheckPath(ctx context.Context, p Proxy) PathResult {
 				timedout = true
 			}
 		}
-		out.Milliseconds = elapsed / 2
+		out.Milliseconds = elapsed
 		if success > 0 {
 			out.Status = "ok"
-			out.Detail = strconv.Itoa(success) + "/2 次固定 HTTPS 连接成功"
+			out.Detail = strconv.Itoa(success) + "/1 次 HTTPS 请求成功"
 		} else if timedout {
 			out.Status = "timeout"
 			out.Detail = "固定 HTTPS 目标连接超时；未证明该地址族可用"

@@ -20,8 +20,8 @@ class PermissionPicker {
    server.input.dataset.server=s.id;group.append(legend,server.row);
    const toolbar=node('div','grant-toolbar'),all=this.checkbox('选择本组节点',false,checked=>this.select(checked,s.id)),count=node('span','muted');all.input.dataset.group=s.id;toolbar.append(all.row,count);group.append(toolbar);
    const host=this.checkbox('服务器主机状态',this.hosts.has(s.id),checked=>{if(checked){this.hosts.add(s.id);this.allowed.add(s.id)}else this.hosts.delete(s.id)});host.input.dataset.host=s.id;group.append(host.row);
-   const choices=[];
-   for(const t of s.tags){const key=this.key(s.id,t.grant_tag||t.raw_tag),c=this.checkbox(t.name+' · '+t.category+' · '+t.raw_tag,this.selected.has(key),checked=>{if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)});c.input.dataset.node=t.id;group.append(c.row);choices.push({...c,t,key})}
+   const choicesRoot=node('div','grant-choices');group.append(choicesRoot);const choices=[];
+   for(const t of s.tags){const key=this.key(s.id,t.grant_tag||t.raw_tag),c=this.checkbox(t.name+' · '+t.category,this.selected.has(key),checked=>{if(checked){this.selected.add(key);this.allowed.add(s.id)}else this.selected.delete(key)});c.input.dataset.node=t.id;choicesRoot.append(c.row);choices.push({...c,t,key})}
    if(!s.tags.length)group.append(node('p','muted','尚未发现可授权节点；新节点默认不授权。'));
    this.groups.push({s,group,server,all,host,count,choices});this.root.append(group)
   }

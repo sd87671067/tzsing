@@ -41,6 +41,7 @@ func put(t *testing.T, f *fixture, path string, v any, c *http.Cookie, csrf stri
 }
 func TestNodePrivacyAliasesAndSwitch(t *testing.T) {
 	f := setup(t)
+	f.db.Exec("INSERT INTO user_operations VALUES(2,'rename')")
 	admin, _ := snapshot(t, f, f.admin)
 	var id string
 	for _, n := range admin[0].Report.Tags {
@@ -145,6 +146,7 @@ func TestNodePrivacyAliasesAndSwitch(t *testing.T) {
 
 func TestWildcardProjectionDoesNotLeakEgress(t *testing.T) {
 	f := setup(t)
+	f.db.Exec("INSERT INTO user_operations VALUES(2,'rename')")
 	snapshot(t, f, f.admin) // register existing report nodes before resolving references
 	f.db.Exec("UPDATE grants SET tag='*' WHERE user_id=2")
 	v, b := snapshot(t, f, f.user)
