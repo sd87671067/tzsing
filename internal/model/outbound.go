@@ -23,7 +23,10 @@ func (t *Tag) Classify() {
 		t.Kind = "actual"
 		_, t.Category = OutboundType(t.EgressType)
 		if t.Egress == "" {
-			t.Category = "当前路径未知"
+			t.Category = "路径待检测"
+			if len(t.Egresses) > 1 {
+				t.Category = "多个出口"
+			}
 		}
 		t.DisplayEligible = true
 		t.DisplayReason = "客户端入站"

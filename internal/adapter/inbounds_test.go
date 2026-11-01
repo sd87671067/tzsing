@@ -65,7 +65,7 @@ func TestInboundWithoutTrafficOrResolvedRouteStillHasProtocol(t *testing.T) {
 	c := New("", "")
 	c.SetInventory(&Inventory{Inbounds: []Inbound{{Tag: "idle", Type: "trojan", Unknown: true}}})
 	tags := c.inboundTags(nil, nil, time.Now())
-	if len(tags) != 1 || tags[0].Type != "trojan" || !tags[0].DisplayEligible || tags[0].Egress != "" || tags[0].Category != "当前路径未知" {
+	if len(tags) != 1 || tags[0].Type != "trojan" || !tags[0].DisplayEligible || tags[0].Egress != "" || tags[0].Category != "路径待检测" {
 		t.Fatal(tags)
 	}
 	if tags[0].Upload != nil || tags[0].Up != nil {

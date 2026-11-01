@@ -16,9 +16,10 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		return
 	}
 	var v struct {
-		Node   string `json:"node_id"`
-		Action string `json:"action"`
-		Source string `json:"source"`
+		Node      string `json:"node_id"`
+		Action    string `json:"action"`
+		Source    string `json:"source"`
+		PathIndex int    `json:"path_index,omitempty"`
 	}
 	if !read(w, r, &v) {
 		return
@@ -28,15 +29,7 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		return
 	}
 	server, tag, e := a.DB.Resolve(u, v.Node)
-	if e == nil && strings.HasPrefix(tag, "identity:") {
-		if _, ok := a.currentInbound(u, v.Node); !ok {
-			fail(w, 403)
-			return
-		}
-		reply(w, 200, map[string]any{"source": v.Source, "message": "当前数据源无法确认该认证身份的独立路径或流量；请查看入站未归属流量。", "at": time.Now().Unix()})
-		return
-	}
-	if e != nil || !strings.HasPrefix(tag, "inbound:") {
+	if e != nil || (!strings.HasPrefix(tag, "inbound:") && !strings.HasPrefix(tag, "identity:")) {
 		fail(w, 403)
 		return
 	}
@@ -57,7 +50,27 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		fail(w, 429)
 		return
 	}
+	routePaths := t.Egresses
 	payload := map[string]string{"tag": strings.TrimPrefix(tag, "inbound:"), "source": v.Source}
+	if strings.HasPrefix(tag, "identity:") {
+		// Resolve permission with the caller first; raw route identity is server-owned.
+		raw, exists := a.currentInbound(store.User{Role: "admin"}, v.Node)
+		if !exists || raw.AuthID == "" {
+			fail(w, 403)
+			return
+		}
+		if v.PathIndex < 0 || v.PathIndex >= len(raw.Egresses) {
+			reply(w, 200, map[string]any{"message": "路径待检测", "at": time.Now().Unix()})
+			return
+		}
+		routePaths = raw.Egresses
+		path := raw.Egresses[v.PathIndex]
+		payload["tag"] = raw.InboundTag
+		payload["auth_id"] = raw.AuthID
+		payload["outbound"] = path.Tag
+		payload["route_version"] = raw.RouteVersion
+		t.IP = path.IP
+	}
 	if t.IP != nil && t.IP.Verified {
 		payload["previous_ipv4"] = t.IP.IPv4
 		payload["previous_ipv6"] = t.IP.IPv6
@@ -84,7 +97,16 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		fail(w, 403)
 		return
 	}
-	if latest.RouteVersion != t.RouteVersion {
+	latestPaths := latest.Egresses
+	if strings.HasPrefix(tag, "identity:") {
+		raw, exists := a.currentInbound(store.User{Role: "admin"}, v.Node)
+		if !exists {
+			fail(w, 403)
+			return
+		}
+		latestPaths = raw.Egresses
+	}
+	if latest.RouteVersion != t.RouteVersion || !samePaths(latestPaths, routePaths) {
 		reply(w, 409, map[string]string{"error": "路由已变化，请重新检测"})
 		return
 	}
@@ -113,4 +135,16 @@ func (a *App) currentInbound(u store.User, id string) (model.Tag, bool) {
 		}
 	}
 	return model.Tag{}, false
+}
+
+func samePaths(a, b []model.EgressPath) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Tag != b[i].Tag || a[i].Type != b[i].Type {
+			return false
+		}
+	}
+	return true
 }

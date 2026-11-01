@@ -26,6 +26,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
   else:
    time.sleep(.5);check=lambda status,detail:{'status':status,'detail':detail}
    answer={'at':int(time.time()),'protocol':'vless','outbound':'shared-direct','config':check('ok','只读校验通过'),'listen':check('ok','本机接受 TCP 连接'),'handshake':check('ok','测试凭据握手成功'),'public':check('unverified','本机检测不代表公网可达'),'path':check('ok','已核实 shared-direct 路径'),'change':check('ok','同地址族缓存一致'),'network':{'ipv4':dict(check('ok','2/2 次 HTTPS 成功'),ip='8.8.8.8',milliseconds=12),'ipv6':dict(check('ok','2/2 次 HTTPS 成功'),ip='2001:4860:4860::8888',milliseconds=15),'attempts':4,'successes':4}}
+  if os.environ.get('TZ_EGRESS_FIXTURE')=='1' and v.get('outbound')=='relay':
+   if self.path=='/intel':answer['ip']='1.1.1.1'
+   elif answer.get('network'):answer['outbound']='relay';answer['network']['ipv4']['ip']='1.1.1.1'
   data=json.dumps(answer).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
 class Unix(socketserver.UnixStreamServer):allow_reuse_address=True
 helper=Unix(str(d/'fixture.sock'),Handler);threading.Thread(target=helper.serve_forever,daemon=True).start()
@@ -51,6 +54,15 @@ while child.poll() is None:
    tags.append({'name':key,'inbound_tag':'a','identity':'inbound','auth_id':auth,'accounting':'unavailable','type':'vless','state':'online','route_reason':'身份路径未知','route_version':'synthetic'})
    s.execute('INSERT OR IGNORE INTO nodes VALUES(?,?,?,?,0)',('auth-'+n,'fixture',key,'认证身份 '+n))
   tags[0]['accounting']='unattributed'
+ if os.environ.get('TZ_EGRESS_FIXTURE')=='1':
+  tags=[]
+  for index,n in enumerate(('alice','bob','multi','unknown')):
+   auth=hashlib.sha256(n.encode()).hexdigest();key='identity:'+hashlib.sha256(('shared'+'\x00'+auth).encode()).hexdigest()
+   paths=[] if n=='unknown' else [{'tag':'shared-direct','type':'direct','ip':{'verified':True,'ipv4':'8.8.8.8','ipv6':'2001:4860:4860::8888','country_code':'US','city':'Fixture City','asn':'AS15169','org':'Fixture Network','updated':now,'path':'shared-direct@synthetic','source':'fixture SOCKS path'}}]
+   if n=='multi':paths.append({'tag':'relay','type':'socks','ip':{'verified':True,'ipv4':'1.1.1.1','country_code':'US','updated':now,'path':'relay@synthetic','source':'fixture SOCKS path'}})
+   tag={'name':key,'auth_id':auth,'inbound_tag':'shared','identity':'inbound','type':'vless','accounting':'rule_user_observed','route_version':'synthetic','state':'online','active':2 if n in ('alice','multi') else 0,'up':1500 if n in ('alice','multi') else 0,'down':16000 if n in ('alice','multi') else 0,'upload':10000*(index+1),'download':20000*(index+1),'egresses':paths}
+   if len(paths)==1:tag.update(egress=paths[0]['tag'],egress_type=paths[0]['type'],ip=paths[0]['ip'])
+   tags.append(tag);s.execute('INSERT OR IGNORE INTO nodes VALUES(?,?,?,?,0)',('egress-'+n,'fixture',key,'fixture-'+n))
  report={'server_id':'fixture','at':now,'interval':2,'discovery':{'inbounds':sum(t.get('identity')=='inbound' and not t.get('auth_id') for t in tags),'auth_identities':2 if os.environ.get('TZ_AUTH_FIXTURE')=='1' else 0,'unsupported_auth':0,'discovered':len(tags)-1,'reported':len(tags)},'host':{'cpu':23.5,'memory_used':1048576,'memory_total':4194304,'disk_used':1048576,'disk_total':8388608,'net_up':1234,'net_down':4321,'uptime':86461,'sing_box':True,'load':'0.25 0.31 0.40'},'tags':tags}
  s.execute('UPDATE servers SET report=?,seen=? WHERE id=?',(json.dumps(report),now-100 if (d/'offline.flag').exists() and (d/'offline.flag').read_text()=='1' else now,'fixture'));s.commit();time.sleep(1)
 raise SystemExit(child.returncode)

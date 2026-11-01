@@ -55,6 +55,8 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
+	Outbound     string           `json:"outbound,omitempty"`
+	RouteVersion string           `json:"route_version,omitempty"`
 	Node         *UUIDNodeRequest `json:"node,omitempty"`
 	AuthID       string           `json:"auth_id,omitempty"`
 	Source       string           `json:"source,omitempty"`

@@ -24,12 +24,23 @@ type Proxy struct {
 	Eligible bool   `json:"eligible"`
 }
 type Detector struct {
+	scope   string
 	mu      sync.RWMutex
 	cache   map[string]model.Exit
 	proxies []Proxy
 }
 
 func New() *Detector { return &Detector{cache: map[string]model.Exit{}} }
+
+// SetScope invalidates every proof when configuration or runtime selection changes.
+func (d *Detector) SetScope(scope string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.scope != scope {
+		d.scope = scope
+		d.cache = map[string]model.Exit{}
+	}
+}
 func (d *Detector) Get(tag string) *model.Exit {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -52,15 +63,33 @@ func (d *Detector) Get(tag string) *model.Exit {
 func (d *Detector) SetProxies(ps []Proxy) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	for _, old := range d.proxies {
+		same := false
+		for _, p := range ps {
+			if old == p {
+				same = true
+				break
+			}
+		}
+		if !same {
+			delete(d.cache, old.Tag)
+		}
+	}
 	d.proxies = append([]Proxy(nil), ps...)
 }
 func (d *Detector) Run(ctx context.Context, ps []Proxy, interval time.Duration) {
 	next := map[string]time.Time{}
 	failures := map[string]int{}
+	previousScope := ""
 	for {
 		d.mu.RLock()
 		ps = append([]Proxy(nil), d.proxies...)
+		scope := d.scope
 		d.mu.RUnlock()
+		if previousScope != scope {
+			next = map[string]time.Time{}
+			previousScope = scope
+		}
 		for _, p := range ps {
 			if !p.Eligible || time.Now().Before(next[p.Tag]) {
 				continue
@@ -75,6 +104,16 @@ func (d *Detector) Run(ctx context.Context, ps []Proxy, interval time.Duration) 
 			}
 			next[p.Tag] = time.Now().Add(delay)
 			d.mu.Lock()
+			current := false
+			for _, candidate := range d.proxies {
+				if candidate == p && candidate.Eligible {
+					current = true
+				}
+			}
+			if scope != d.scope || !current {
+				d.mu.Unlock()
+				continue
+			}
 			if old, ok := d.cache[p.Tag]; ok && v.Error != "" && old.Verified {
 				old.Error = v.Error
 				old.Attempted = v.Attempted

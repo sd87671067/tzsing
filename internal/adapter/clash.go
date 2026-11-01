@@ -31,6 +31,8 @@ type Proxy struct {
 }
 type count struct{ up, down int64 }
 type Clash struct {
+	recentPaths  map[string][]model.EgressPath
+	pathVersion  string
 	unattributed int
 	URL, Secret  string
 	Client       *http.Client

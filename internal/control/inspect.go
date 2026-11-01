@@ -40,7 +40,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 		return
 	}
 	now := time.Now()
-	key := r.URL.Path + ":" + v.Tag + ":" + v.Source
+	key := r.URL.Path + ":" + v.Tag + ":" + v.AuthID + ":" + v.Outbound + ":" + v.Source
 	if c.inspectLast == nil {
 		c.inspectLast = map[string]time.Time{}
 	}
@@ -90,7 +90,11 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 		if e == nil && inv.ConfigHash == digest(raw) {
 			clash := adapter.New(ac.ClashURL, ac.ClashSecret)
 			clash.SetInventory(inv)
-			t, e = clash.InboundPath(v.Tag)
+			if v.AuthID != "" {
+				t, e = clash.IdentityPath(v.Tag, v.AuthID, v.Outbound, v.RouteVersion)
+			} else {
+				t, e = clash.InboundPath(v.Tag)
+			}
 			if e == nil && t.Egress != "" {
 				result.Outbound = t.Egress
 				result.Path = egress.Check{Status: "unverified", Detail: "关联出站 " + t.Egress + "，探针路径尚未核实"}
@@ -118,7 +122,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 		if expected == "" {
 			expected = v.PreviousIPv6
 		}
-		if observed, ok := c.inspectExits[v.Tag]; ok && observed.hash == digest(raw) && time.Since(observed.at) < 5*time.Minute {
+		if observed, ok := c.inspectExits[v.Tag+":"+v.AuthID+":"+v.Outbound]; ok && observed.hash == digest(raw) && time.Since(observed.at) < 5*time.Minute {
 			expected = observed.ipv4
 			if expected == "" {
 				expected = observed.ipv6
@@ -126,8 +130,19 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 		}
 		out := egress.LookupSource(ctx, path, v.Source, expected, digest(raw)+"@"+t.Egress)
 		// Never attach a result to a config which changed while the request ran.
+		if v.AuthID != "" && validPath {
+			clash := adapter.New(ac.ClashURL, ac.ClashSecret)
+			inv, e := adapter.ReadInventory(ac.InventoryFile)
+			if e != nil {
+				validPath = false
+			} else {
+				clash.SetInventory(inv)
+				_, e = clash.IdentityPath(v.Tag, v.AuthID, v.Outbound, v.RouteVersion)
+				validPath = e == nil
+			}
+		}
 		latest, e := os.ReadFile(c.Config.Config)
-		if e != nil || digest(latest) != digest(raw) {
+		if e != nil || digest(latest) != digest(raw) || (v.AuthID != "" && !validPath) {
 			send(200, egress.SourceResult{Source: v.Source, Message: "检测期间路由已变化，请重新检测"})
 			return
 		}
@@ -158,7 +173,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 			}
 		}
 	}
-	if result.Config.Status == "ok" && result.Listen.Status == "ok" && supportsNode(in) {
+	if v.AuthID == "" && result.Config.Status == "ok" && result.Listen.Status == "ok" && supportsNode(in) {
 		start := time.Now()
 		e := c.probeNode(config, v.Tag)
 		if e == nil {
@@ -180,7 +195,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 					break
 				}
 			}
-			c.inspectExits[v.Tag] = observedExit{hash: digest(raw), at: time.Now(), ipv4: network.IPv4.IP, ipv6: network.IPv6.IP}
+			c.inspectExits[v.Tag+":"+v.AuthID+":"+v.Outbound] = observedExit{hash: digest(raw), at: time.Now(), ipv4: network.IPv4.IP, ipv6: network.IPv6.IP}
 		}
 		if network.Successes == 0 {
 			result.Path.Status = "error"
@@ -204,8 +219,19 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 			}
 		}
 	}
+	if v.AuthID != "" && validPath {
+		clash := adapter.New(ac.ClashURL, ac.ClashSecret)
+		inv, e := adapter.ReadInventory(ac.InventoryFile)
+		if e != nil {
+			validPath = false
+		} else {
+			clash.SetInventory(inv)
+			_, e = clash.IdentityPath(v.Tag, v.AuthID, v.Outbound, v.RouteVersion)
+			validPath = e == nil
+		}
+	}
 	latest, e := os.ReadFile(c.Config.Config)
-	if e != nil || digest(latest) != digest(raw) {
+	if e != nil || digest(latest) != digest(raw) || (v.AuthID != "" && !validPath) {
 		result.Path = egress.Check{Status: "unknown", Detail: "检测期间配置已变化，结果不再代表当前路径"}
 		result.Network = nil
 		result.Outbound = ""

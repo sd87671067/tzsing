@@ -52,6 +52,29 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	if t.Identity == "inbound" && t.Egress == "" {
 		t.IP = nil
 	}
+	if len(t.Egresses) == 1 && t.Egresses[0].Tag == t.Egress && t.IP != nil && t.IP.Path == t.Egress+"@"+t.RouteVersion {
+		ip := *t.IP
+		t.Egresses[0].IP = &ip
+	}
+	// Each path owns its own address; never lend a single-path fallback to a
+	// multi-exit identity. Reports persist the full path list in SQLite unchanged.
+	for i := range t.Egresses {
+		path := &t.Egresses[i]
+		if path.IP != nil {
+			ip := *path.IP
+			path.IP = &ip
+			valid := false
+			for _, v := range []string{ip.IPv4, ip.IPv6} {
+				a := net.ParseIP(v)
+				if a != nil && a.IsGlobalUnicast() && !a.IsPrivate() {
+					valid = true
+				}
+			}
+			if !valid || ip.Path != path.Tag+"@"+t.RouteVersion {
+				path.IP = nil
+			}
+		}
+	}
 	t.Classify()
 	if t.Verification == "verified" && (time.Now().Unix()-t.IP.Updated > 3600 || t.State == "unknown") {
 		t.Verification = "stale"
@@ -131,6 +154,17 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		if !show {
 			t.InboundTag = ""
 			t.Egress = ""
+			for i := range t.Egresses {
+				t.Egresses[i].Tag = ""
+				if t.Egresses[i].IP != nil {
+					t.Egresses[i].IP.Path = ""
+				}
+			}
+			if t.IP != nil {
+				ip := *t.IP
+				ip.Path = ""
+				t.IP = &ip
+			}
 		}
 	}
 	if t.Identity != "inbound" && t.Egress != "" {

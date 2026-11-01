@@ -150,28 +150,16 @@ func Run(ctx context.Context, path string) error {
 				message += "native user stats unavailable"
 			}
 		}
-		for i := range tags {
-			if tags[i].Kind == "actual" {
-				probeTag := tags[i].Name
-				if tags[i].Identity == "inbound" {
-					probeTag = tags[i].Egress
-				}
-				if probeTag != "" {
-					if tags[i].Identity != "inbound" || routesVerified {
-						tags[i].IP = det.Get(probeTag)
-						if tags[i].Identity == "inbound" && tags[i].IP != nil {
-							tags[i].IP.Path = probeTag + "@" + routeVersion
-						}
-					}
-				}
-			}
+		if len(tags) > 0 {
+			det.SetScope(tags[0].RouteVersion)
 		}
+		attachExits(tags, det.Get, routesVerified)
 		for i := range tags {
 			t := &tags[i]
 			if t.Identity == "inbound" && t.AuthID == "" && appliedExit != nil && appliedExit.ConfigHash == routeVersion && appliedExit.Tag == t.InboundTag && t.Egress != "" && time.Now().Unix()-appliedExit.At < 3600 {
 				ip := net.ParseIP(appliedExit.IP)
 				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
-					v := &model.Exit{Verified: true, Updated: appliedExit.At, Source: "受限控制器 · 实际目标入站路径", Path: t.Egress + "@" + routeVersion}
+					v := &model.Exit{Verified: true, Updated: appliedExit.At, Source: "受限控制器 · 实际目标入站路径", Path: t.Egress + "@" + t.RouteVersion}
 					if ip.To4() != nil {
 						v.IPv4 = ip.String()
 					} else {
@@ -217,6 +205,36 @@ func Run(ctx context.Context, path string) error {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(delay):
+		}
+	}
+}
+
+// Outlet proofs are shared; UUID counters and connection counts remain untouched.
+func attachExits(tags []model.Tag, get func(string) *model.Exit, routesVerified bool) {
+	for i := range tags {
+		t := &tags[i]
+		if t.Kind != "actual" {
+			continue
+		}
+		if t.Identity == "inbound" {
+			if !routesVerified {
+				continue
+			}
+			for j := range t.Egresses {
+				p := &t.Egresses[j]
+				p.IP = get(p.Tag)
+				if p.IP != nil {
+					p.IP.Path = p.Tag + "@" + t.RouteVersion
+				}
+			}
+			if t.Egress != "" {
+				t.IP = get(t.Egress)
+				if t.IP != nil {
+					t.IP.Path = t.Egress + "@" + t.RouteVersion
+				}
+			}
+		} else {
+			t.IP = get(t.Name)
 		}
 	}
 }

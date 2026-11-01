@@ -1,18 +1,25 @@
 package model
 
+type EgressPath struct {
+	Tag  string `json:"tag,omitempty"`
+	Type string `json:"type"`
+	IP   *Exit  `json:"ip,omitempty"`
+}
+
 type Tag struct {
-	AuthName         string `json:"auth_name,omitempty"`
-	AccountingReason string `json:"accounting_reason,omitempty"`
-	LegacyAuthID     string `json:"legacy_auth_id,omitempty"`
-	AuthScheme       string `json:"auth_scheme,omitempty"`
-	AuthID           string `json:"auth_id,omitempty"`
-	Accounting       string `json:"accounting,omitempty"`
-	EgressType       string `json:"egress_type,omitempty"`
-	GrantTag         string `json:"grant_tag,omitempty"`
-	RouteVersion     string `json:"route_version,omitempty"`
-	Identity         string `json:"identity,omitempty"`
-	InboundTag       string `json:"inbound_tag,omitempty"`
-	RouteReason      string `json:"route_reason,omitempty"`
+	Egresses         []EgressPath `json:"egresses,omitempty"`
+	AuthName         string       `json:"auth_name,omitempty"`
+	AccountingReason string       `json:"accounting_reason,omitempty"`
+	LegacyAuthID     string       `json:"legacy_auth_id,omitempty"`
+	AuthScheme       string       `json:"auth_scheme,omitempty"`
+	AuthID           string       `json:"auth_id,omitempty"`
+	Accounting       string       `json:"accounting,omitempty"`
+	EgressType       string       `json:"egress_type,omitempty"`
+	GrantTag         string       `json:"grant_tag,omitempty"`
+	RouteVersion     string       `json:"route_version,omitempty"`
+	Identity         string       `json:"identity,omitempty"`
+	InboundTag       string       `json:"inbound_tag,omitempty"`
+	RouteReason      string       `json:"route_reason,omitempty"`
 
 	FallbackName   bool   `json:"-"`
 	ExpiresAt      int64  `json:"expires_at,omitempty"`

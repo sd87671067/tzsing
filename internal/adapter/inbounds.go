@@ -1,6 +1,8 @@
 package adapter
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -44,6 +46,20 @@ func (c *Clash) resolve(tag string, api map[string]Proxy, seen map[string]bool) 
 	return ""
 }
 func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time) []model.Tag {
+	// Runtime choices are part of the path identity, including detour selectors.
+	choices := map[string]string{}
+	for _, o := range c.inventory.Outbounds {
+		if kind, _ := model.OutboundType(o.Type); kind == "logical" {
+			choices[o.Tag] = api[o.Tag].Now
+		}
+	}
+	b, _ := json.Marshal(choices)
+	version := fmt.Sprintf("%s:%t:%x", c.inventory.ConfigHash, c.inventory.RoutesVerified, sha256.Sum256(b))
+	if c.pathVersion != version {
+		c.recentPaths = map[string][]model.EgressPath{}
+		c.pathVersion = version
+	}
+	paths := map[string]map[string]model.EgressPath{}
 	elapsed := now.Sub(c.last).Seconds()
 	if elapsed <= 0 {
 		elapsed = 2
@@ -113,6 +129,19 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 				c.unattributed++
 			}
 			active[tag]++
+			// sing-box reverses the group chain: element zero is the actual outbound.
+			// Never use a selector's current choice for an already established connection.
+			if len(x.Chains) > 0 {
+				for _, o := range c.inventory.Outbounds {
+					kind, _ := model.OutboundType(o.Type)
+					if o.Tag == x.Chains[0] && kind == "actual" && (o.Detour == "" || c.resolve(o.Detour, api, map[string]bool{}) != "") {
+						if paths[tag] == nil {
+							paths[tag] = map[string]model.EgressPath{}
+						}
+						paths[tag][o.Tag] = model.EgressPath{Tag: o.Tag, Type: o.Type}
+					}
+				}
+			}
 			du, dd := int64(0), int64(0)
 			if prev, ok := c.previous[x.ID]; ok {
 				if prev.Metadata.Type == x.Metadata.Type && prev.Metadata.InboundUser == x.Metadata.InboundUser {
@@ -131,7 +160,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 	}
 	tags := []model.Tag{}
 	for _, in := range c.inventory.Inbounds {
-		t := model.Tag{Name: "inbound:" + in.Tag, InboundTag: in.Tag, Identity: "inbound", Type: in.Type, RouteVersion: c.inventory.ConfigHash, State: "unknown", RouteReason: "未知：按用户、目标或规则集分流，无法确定唯一出口"}
+		t := model.Tag{Name: "inbound:" + in.Tag, InboundTag: in.Tag, Identity: "inbound", Type: in.Type, RouteVersion: version, State: "unknown", RouteReason: "未知：按用户、目标或规则集分流，无法确定唯一出口"}
 		resolved := ""
 		unknown := in.Unknown || len(in.Routes) == 0
 		for _, root := range in.Routes {
@@ -179,6 +208,47 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			variants = append(variants, u)
 		}
 		for _, t := range variants {
+			if t.AuthID != "" {
+				if active[t.Name] > 0 {
+					t.Egresses = nil
+					for _, path := range paths[t.Name] {
+						t.Egresses = append(t.Egresses, path)
+					}
+					sort.Slice(t.Egresses, func(i, j int) bool { return t.Egresses[i].Tag < t.Egresses[j].Tag })
+					c.recentPaths[t.Name] = append([]model.EgressPath(nil), t.Egresses...)
+				} else {
+					t.Egresses = append([]model.EgressPath(nil), c.recentPaths[t.Name]...)
+				}
+				// Exact authenticated rules also give an unambiguous idle path, independently
+				// of traffic counters. Conditional/multiple destinations remain separate.
+				if len(t.Egresses) == 0 && active[t.Name] == 0 && snap != nil {
+					roots := map[string]bool{}
+					for _, binding := range in.RuleBindings {
+						if binding.ID == t.AuthID {
+							roots[binding.Outbound] = true
+						}
+					}
+					destinations := map[string]bool{}
+					for root := range roots {
+						dest := c.resolve(root, api, map[string]bool{})
+						if dest != "" {
+							destinations[dest] = true
+						}
+					}
+					for _, o := range c.inventory.Outbounds {
+						if destinations[o.Tag] {
+							t.Egresses = append(t.Egresses, model.EgressPath{Tag: o.Tag, Type: o.Type})
+						}
+					}
+				}
+				if len(t.Egresses) == 1 {
+					t.Egress = t.Egresses[0].Tag
+					t.EgressType = t.Egresses[0].Type
+				}
+				if len(t.Egresses) > 0 {
+					t.RouteReason = "认证身份与实际出站路径"
+				}
+			}
 			t.Classify()
 			if snap != nil {
 				t.State = "online"
@@ -224,4 +294,25 @@ func (c *Clash) InboundPath(tag string) (model.Tag, error) {
 		}
 	}
 	return model.Tag{}, fmt.Errorf("inbound unavailable")
+}
+
+// IdentityPath revalidates a server-owned UUID and selected path against current
+// connection evidence (or its exact authenticated idle routing rule).
+func (c *Clash) IdentityPath(inbound, id, outbound, version string) (model.Tag, error) {
+	tags, err := c.Collect()
+	if err != nil {
+		return model.Tag{}, err
+	}
+	for _, t := range tags {
+		if t.InboundTag == inbound && t.AuthID == id && t.RouteVersion == version {
+			for _, p := range t.Egresses {
+				if p.Tag == outbound {
+					t.Egress = p.Tag
+					t.EgressType = p.Type
+					return t, nil
+				}
+			}
+		}
+	}
+	return model.Tag{}, fmt.Errorf("identity path changed or unavailable")
 }
