@@ -11,7 +11,8 @@ import (
 
 type Connection struct {
 	Metadata struct {
-		Type string `json:"type"`
+		Type        string `json:"type"`
+		InboundUser string `json:"inboundUser,omitempty"`
 	} `json:"metadata"`
 	ID       string   `json:"id"`
 	Chains   []string `json:"chains"`
@@ -22,8 +23,9 @@ type Snapshot struct {
 	Connections []Connection `json:"connections"`
 }
 type Proxy struct {
-	Type string `json:"type"`
-	Now  string `json:"now"`
+	Type        string `json:"type"`
+	InboundUser string `json:"inboundUser,omitempty"`
+	Now         string `json:"now"`
 }
 type count struct{ up, down int64 }
 type Clash struct {

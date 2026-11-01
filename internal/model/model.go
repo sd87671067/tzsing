@@ -1,6 +1,8 @@
 package model
 
 type Tag struct {
+	AuthID       string `json:"auth_id,omitempty"`
+	Accounting   string `json:"accounting,omitempty"`
 	EgressType   string `json:"egress_type,omitempty"`
 	GrantTag     string `json:"grant_tag,omitempty"`
 	RouteVersion string `json:"route_version,omitempty"`
@@ -85,21 +87,38 @@ type Host struct {
 	NetDown     *float64 `json:"net_down"`
 	SingBox     bool     `json:"sing_box"`
 }
+type Discovery struct {
+	Inbounds        int `json:"inbounds"`
+	AuthIdentities  int `json:"auth_identities"`
+	UnsupportedAuth int `json:"unsupported_auth"`
+	Discovered      int `json:"discovered"`
+	Reported        int `json:"reported"`
+}
+type Diagnostics struct {
+	Discovery
+	BackendVisible     int            `json:"backend_visible"`
+	BackendFiltered    int            `json:"backend_filtered"`
+	Authorized         int            `json:"authorized"`
+	PermissionFiltered int            `json:"permission_filtered"`
+	Reasons            map[string]int `json:"reasons"`
+}
 type Report struct {
-	UnattributedConnections int    `json:"unattributed_connections,omitempty"`
-	ServerID                string `json:"server_id"`
-	Epoch                   string `json:"epoch"`
-	Seq                     int64  `json:"seq"`
-	At                      int64  `json:"at"`
-	Interval                int    `json:"interval"`
-	Host                    *Host  `json:"host"`
-	Tags                    []Tag  `json:"tags"`
-	Error                   string `json:"error,omitempty"`
+	Discovery               *Discovery `json:"discovery,omitempty"`
+	UnattributedConnections int        `json:"unattributed_connections,omitempty"`
+	ServerID                string     `json:"server_id"`
+	Epoch                   string     `json:"epoch"`
+	Seq                     int64      `json:"seq"`
+	At                      int64      `json:"at"`
+	Interval                int        `json:"interval"`
+	Host                    *Host      `json:"host"`
+	Tags                    []Tag      `json:"tags"`
+	Error                   string     `json:"error,omitempty"`
 }
 type View struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Online bool    `json:"online"`
-	Seen   int64   `json:"seen"`
-	Report *Report `json:"report"`
+	Diagnostics *Diagnostics `json:"diagnostics,omitempty"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Online      bool         `json:"online"`
+	Seen        int64        `json:"seen"`
+	Report      *Report      `json:"report"`
 }

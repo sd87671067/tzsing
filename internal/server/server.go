@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -386,7 +387,7 @@ func (a *App) history(w http.ResponseWriter, r *http.Request, u store.User) {
 	}
 	// Once an Agent supplies true inbound identities, retired outbound history
 	// is unavailable through the new monitoring/export API as well as the UI.
-	if !strings.HasPrefix(tag, "inbound:") {
+	if !strings.HasPrefix(tag, "inbound:") && !(strings.HasPrefix(tag, "identity:") && model.ValidAuthID(strings.TrimPrefix(tag, "identity:"))) {
 		var raw []byte
 		if a.DB.QueryRow("SELECT report FROM servers WHERE id=?", server).Scan(&raw) == nil {
 			var report model.Report
@@ -786,6 +787,30 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 			return
 		}
 		reply(w, 200, map[string]bool{"ok": true})
+	case "monitor-diagnostics":
+		if r.Method != "GET" {
+			fail(w, 405)
+			return
+		}
+		target := u
+		if value := r.URL.Query().Get("user_id"); value != "" {
+			id, e := strconv.ParseInt(value, 10, 64)
+			if e != nil {
+				fail(w, 400)
+				return
+			}
+			target, e = a.DB.User(id)
+			if e != nil {
+				fail(w, 404)
+				return
+			}
+		}
+		data, e := a.DB.MonitorDiagnostics(target)
+		if e != nil {
+			fail(w, 500)
+			return
+		}
+		reply(w, 200, data)
 	case "audit":
 		if r.Method != "GET" {
 			fail(w, 405)
@@ -827,7 +852,7 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) {
 	}
 	seen := map[string]bool{}
 	for _, t := range v.Tags {
-		if (!(t.Identity == "inbound" && validTag(t.InboundTag) && t.Name == "inbound:"+t.InboundTag) && !validTag(t.Name)) || seen[t.Name] || len(t.Type) > 64 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
+		if (t.Identity == "inbound" && (!validTag(t.InboundTag) || t.Name != model.IdentityName(t.InboundTag, t.AuthID) || (t.AuthID != "" && !model.ValidAuthID(t.AuthID)))) || (t.Identity != "inbound" && !validTag(t.Name)) || seen[t.Name] || len(t.Type) > 64 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
 			fail(w, 400)
 			return
 		}

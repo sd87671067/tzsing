@@ -64,7 +64,7 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.IP = nil
 	}
 	t.Quality = "observed_lower_bound"
-	if t.Kind == "actual" {
+	if t.Kind == "actual" && t.Accounting != "unavailable" {
 		var up, down int64
 		if s.QueryRow("SELECT totalup,totaldown FROM counters WHERE server=? AND tag=?", server, raw).Scan(&up, &down) == nil {
 			t.Upload = &up
@@ -91,6 +91,19 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.Name = personal
 	}
 	t.FallbackName = global == "" && personal == ""
+	if t.Accounting == "unavailable" {
+		t.Up = nil
+		t.Down = nil
+		t.Upload = nil
+		t.Download = nil
+		t.Active = nil
+		t.MonthUsed = nil
+		t.TodayUpload = 0
+		t.TodayDownload = 0
+		t.MonthUpload = 0
+		t.MonthDownload = 0
+		t.Quality = "authentication_unavailable"
+	}
 	t.GrantTag = ""
 	t.RawTag = ""
 	t.GlobalName = ""
@@ -131,13 +144,14 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		}
 	}
 	if u.Role != "admin" {
+		t.AuthID = ""
 		switch t.State {
 		case "online", "unknown", "offline", "active", "idle":
 		default:
 			t.State = "unknown"
 		}
 		switch t.Quality {
-		case "observed_lower_bound", "unavailable", "observed-lower-bound":
+		case "observed_lower_bound", "unavailable", "observed-lower-bound", "authentication_unavailable":
 		default:
 			t.Quality = ""
 		}
@@ -159,7 +173,7 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	}
 	t.Month = time.Now().UTC().Format("2006-01")
 	t.MonthUsed = nil
-	if t.Kind == "actual" {
+	if t.Kind == "actual" && t.Accounting != "unavailable" {
 		var used int64
 		if err := s.QueryRow("SELECT used FROM monthly WHERE server=? AND tag=? AND month=?", server, raw, t.Month).Scan(&used); err == nil {
 			t.MonthUsed = &used
@@ -190,6 +204,9 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 			t.AlertThreshold = 0
 			t.PeriodStart = 0
 		}
+	}
+	if t.Accounting == "unavailable" {
+		t.MonthUsed = nil
 	}
 	return nil
 }

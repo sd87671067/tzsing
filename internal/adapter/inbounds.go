@@ -51,8 +51,15 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 	active := map[string]int{}
 	next := map[string]Connection{}
 	known := map[string]string{}
+	identities := map[string]map[string]string{}
 	for _, in := range c.inventory.Inbounds {
 		known[in.Type+"/"+in.Tag] = "inbound:" + in.Tag
+		if in.UserField == "inboundUser" {
+			identities[in.Type+"/"+in.Tag] = map[string]string{}
+			for _, id := range in.AuthIDs {
+				identities[in.Type+"/"+in.Tag][id] = model.IdentityName(in.Tag, id)
+			}
+		}
 	}
 	if snap != nil {
 		c.unattributed = 0
@@ -69,10 +76,13 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 				c.unattributed++
 				continue
 			}
+			if key := identities[x.Metadata.Type][model.AuthID(x.Metadata.InboundUser)]; x.Metadata.InboundUser != "" && key != "" {
+				tag = key
+			}
 			active[tag]++
 			du, dd := int64(0), int64(0)
 			if prev, ok := c.previous[x.ID]; ok {
-				if prev.Metadata.Type == x.Metadata.Type {
+				if prev.Metadata.Type == x.Metadata.Type && prev.Metadata.InboundUser == x.Metadata.InboundUser {
 					du = max(0, x.Upload-prev.Upload)
 					dd = max(0, x.Download-prev.Download)
 				}
@@ -107,23 +117,41 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 				}
 			}
 		}
-		t.Classify()
-		if snap != nil {
-			t.State = "online"
-			t.Quality = "observed_lower_bound"
-			d := delta[t.Name]
-			n := c.totals[t.Name]
-			n.up += d.up
-			n.down += d.down
-			c.totals[t.Name] = n
-			up, down, cnt := float64(d.up)/elapsed, float64(d.down)/elapsed, active[t.Name]
-			t.Up = &up
-			t.Down = &down
-			t.Upload = &n.up
-			t.Download = &n.down
-			t.Active = &cnt
+		variants := []model.Tag{t}
+		if len(in.AuthIDs) > 0 {
+			variants[0].Accounting = "unattributed"
 		}
-		tags = append(tags, t)
+		for _, id := range in.AuthIDs {
+			u := t
+			u.AuthID = id
+			u.Name = model.IdentityName(in.Tag, id)
+			u.Accounting = "unavailable"
+			if in.UserField == "inboundUser" {
+				u.Accounting = "identity"
+			}
+			variants = append(variants, u)
+		}
+		for _, t := range variants {
+			t.Classify()
+			if snap != nil {
+				t.State = "online"
+				t.Quality = "observed_lower_bound"
+				if t.Accounting != "unavailable" {
+					d := delta[t.Name]
+					n := c.totals[t.Name]
+					n.up += d.up
+					n.down += d.down
+					c.totals[t.Name] = n
+					up, down, cnt := float64(d.up)/elapsed, float64(d.down)/elapsed, active[t.Name]
+					t.Up = &up
+					t.Down = &down
+					t.Upload = &n.up
+					t.Download = &n.down
+					t.Active = &cnt
+				}
+			}
+			tags = append(tags, t)
+		}
 	}
 	if snap != nil {
 		c.previous = next

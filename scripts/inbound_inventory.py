@@ -1,7 +1,13 @@
 """Conservative route analysis. Every configured inbound tag is an identity.
-Credentials, listen addresses and authentication users never enter inventory.
+Credentials and listen addresses never enter inventory. Named authentication
+users are exported only as stable digests; UUID/password rotation preserves IDs.
 Conditional matches contribute all possible routes; ambiguity stays explicit.
 """
+
+import hashlib
+
+def auth_id(name):
+    return hashlib.sha256(name.encode()).hexdigest()
 
 def inbound_inventory(config):
     out = []
@@ -36,5 +42,10 @@ def inbound_inventory(config):
                 candidates.add(final)
             else:
                 unknown = True
-        out.append({'tag': tag, 'type': inbound['type'], 'routes': sorted(candidates), 'unknown': unknown})
+        users = inbound.get('users', [])
+        names = [u.get('name') or u.get('username') for u in users]
+        # A missing/duplicate name cannot be a stable identity. Never hash credentials.
+        identities = sorted({auth_id(n) for n in names if isinstance(n, str) and n and names.count(n) == 1})
+        out.append({'tag': tag, 'type': inbound['type'], 'routes': sorted(candidates), 'unknown': unknown,
+                    'auth_ids': identities, 'auth_count': len(users), 'auth_unsupported': len(users)-len(identities)})
     return out

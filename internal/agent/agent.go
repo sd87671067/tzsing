@@ -147,7 +147,7 @@ func Run(ctx context.Context, path string) error {
 		}
 		for i := range tags {
 			t := &tags[i]
-			if t.Identity == "inbound" && appliedExit != nil && appliedExit.ConfigHash == routeVersion && appliedExit.Tag == t.InboundTag && t.Egress != "" && time.Now().Unix()-appliedExit.At < 3600 {
+			if t.Identity == "inbound" && t.AuthID == "" && appliedExit != nil && appliedExit.ConfigHash == routeVersion && appliedExit.Tag == t.InboundTag && t.Egress != "" && time.Now().Unix()-appliedExit.At < 3600 {
 				ip := net.ParseIP(appliedExit.IP)
 				if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() {
 					v := &model.Exit{Verified: true, Updated: appliedExit.At, Source: "受限控制器 · 实际目标入站路径", Path: t.Egress + "@" + routeVersion}
@@ -160,7 +160,7 @@ func Run(ctx context.Context, path string) error {
 				}
 			}
 		}
-		report := model.Report{UnattributedConnections: clash.UnattributedConnections(), ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}
+		report := model.Report{Discovery: clash.Discovery(len(tags)), UnattributedConnections: clash.UnattributedConnections(), ServerID: c.ServerID, Epoch: epoch, Seq: seq, At: time.Now().Unix(), Interval: sample, Host: host.Sample(), Tags: tags, Error: message}
 		b, e = json.Marshal(report)
 		if e != nil {
 			return e

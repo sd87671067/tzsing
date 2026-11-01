@@ -167,6 +167,10 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 			}
 		}
 		tags := []model.Tag{}
+		var diagnostics *model.Diagnostics
+		if u.Role == "admin" {
+			diagnostics = s.diagnose(u, r.id, report)
+		}
 		inboundInventory := false
 		for _, t := range report.Tags {
 			inboundInventory = inboundInventory || t.Identity == "inbound"
@@ -238,6 +242,7 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 		report.Error = ""
 		if u.Role != "admin" {
 			report.Epoch = ""
+			report.Discovery = nil
 		}
 		if !full {
 			report.UnattributedConnections = 0
@@ -255,7 +260,7 @@ func (s *Store) views(u User, management bool) ([]model.View, error) {
 				report.Tags[i].Active = nil
 			}
 		}
-		out = append(out, model.View{ID: r.id, Name: r.name, Online: online, Seen: r.seen, Report: &report})
+		out = append(out, model.View{Diagnostics: diagnostics, ID: r.id, Name: r.name, Online: online, Seen: r.seen, Report: &report})
 	}
 	return out, nil
 }

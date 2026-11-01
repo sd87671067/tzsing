@@ -28,6 +28,14 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		return
 	}
 	server, tag, e := a.DB.Resolve(u, v.Node)
+	if e == nil && strings.HasPrefix(tag, "identity:") {
+		if _, ok := a.currentInbound(u, v.Node); !ok {
+			fail(w, 403)
+			return
+		}
+		reply(w, 200, map[string]any{"source": v.Source, "message": "当前数据源无法确认该认证身份的独立路径或流量；请查看入站未归属流量。", "at": time.Now().Unix()})
+		return
+	}
 	if e != nil || !strings.HasPrefix(tag, "inbound:") {
 		fail(w, 403)
 		return

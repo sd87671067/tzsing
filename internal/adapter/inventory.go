@@ -27,10 +27,16 @@ type Inventory struct {
 	RoutesVerified bool       `json:"routes_verified"`
 }
 type Inbound struct {
-	Tag     string   `json:"tag"`
-	Type    string   `json:"type"`
-	Routes  []string `json:"routes"`
-	Unknown bool     `json:"unknown"`
+	AuthIDs         []string `json:"auth_ids,omitempty"`
+	AuthCount       int      `json:"auth_count,omitempty"`
+	AuthUnsupported int      `json:"auth_unsupported,omitempty"`
+	// Enabled only for a separately attested API extension. Standard sing-box Clash
+	// has no authentication identity field. Never infer identity from source/IP/chains.
+	UserField string   `json:"user_field,omitempty"`
+	Tag       string   `json:"tag"`
+	Type      string   `json:"type"`
+	Routes    []string `json:"routes"`
+	Unknown   bool     `json:"unknown"`
 }
 type Outbound struct {
 	Members []string `json:"members"`
@@ -50,6 +56,7 @@ func ReadInventory(path string) (*Inventory, error) {
 		return nil, fmt.Errorf("invalid outbound inventory")
 	}
 	seenIn := map[string]bool{}
+	discovered := 0
 	if len(v.Inbounds) > 512 {
 		return nil, fmt.Errorf("invalid inbound inventory")
 	}
@@ -58,6 +65,20 @@ func ReadInventory(path string) (*Inventory, error) {
 			return nil, fmt.Errorf("invalid inbound identity")
 		}
 		seenIn[i.Tag] = true
+		discovered += 1 + len(i.AuthIDs)
+		if discovered > 512 {
+			return nil, fmt.Errorf("identity inventory exceeds report limit")
+		}
+		ids := map[string]bool{}
+		if len(i.AuthIDs) > 512 || i.AuthCount < 0 || i.AuthUnsupported < 0 || (i.UserField != "" && i.UserField != "inboundUser") {
+			return nil, fmt.Errorf("invalid authentication inventory")
+		}
+		for _, id := range i.AuthIDs {
+			if !model.ValidAuthID(id) || ids[id] {
+				return nil, fmt.Errorf("invalid authentication identity")
+			}
+			ids[id] = true
+		}
 	}
 	seen := map[string]bool{}
 	for _, o := range v.Outbounds {
