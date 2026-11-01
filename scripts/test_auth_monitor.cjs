@@ -37,7 +37,7 @@ assert(base&&state&&process.env.TZ_SYNTHETIC_STAGE==='1','isolated synthetic sta
   await p.getByRole('button',{name:'查看节点链接',exact:true}).click();
   await p.waitForFunction(()=>document.querySelector('.control-body select')?.options.length===1);
   assert.equal(await p.locator('.control-body select option').count(),1);
-  await p.getByRole('button',{name:'查看节点链接',exact:true}).click();
+  await p.locator('.control-body').getByRole('button',{name:'查看节点链接',exact:true}).click();
   await p.waitForFunction(()=>document.querySelector('.control-body textarea')?.value.includes('synthetic-fixture'));
   await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('.control-body'));
   const name='auth-'+Date.now();await api(ctx,'admin/users','POST',{name,password:'isolated-validation'});uid=(await api(ctx,'admin/users')).find(u=>u.name===name).id;await api(ctx,'admin/grants','PUT',{user_id:uid,servers:['fixture'],grants:[{server:'fixture',tag:auth[0].grant_tag}]});
