@@ -47,10 +47,10 @@ const NodeInspect=(()=>{
   if(checking||!current)return;const id=current,epoch=generation;checking=true;render(rows.get(id));
   try{const data=await api('node-inspect','POST',{node_id:id,action:'diagnostics'});if(epoch!==generation||id!==current)return;
    result={...data,route:rows.get(id)?.t.route_version};
-   const fields=[['检测时间',when(data.at)],['入站协议',protocolName(data.protocol)],['关联出站',data.outbound||'当前路径未知']];
+   const fields=[['检测时间',when(data.at)],['入站协议',protocolName(data.protocol)],['关联出站',data.outbound||'当前路径未知']];if(data.message)fields.push(['检测结果',data.message]);
    for(const [k,title]of [['config','配置校验'],['listen','本机监听'],['handshake','协议握手'],['public','公网可达性'],['path','指定出口路径'],['change','出口 IP 比较']]){const c=data[k];if(c)fields.push([title,(labels[c.status]||'无法确定')+' · '+c.detail+(c.milliseconds!=null?' · '+c.milliseconds+' ms':'')])}
    if(data.network){for(const [k,title]of [['ipv4','IPv4 HTTPS'],['ipv6','IPv6 HTTPS']]){const c=data.network[k];fields.push([title,(labels[c.status]||'无法确定')+' · '+c.detail+(c.ip?' · '+c.ip:'')+(c.milliseconds!=null?' · 平均 '+c.milliseconds+' ms':'')])}fields.push(['连接成功率',data.network.successes+' / '+data.network.attempts+' 次（按地址族分别说明）'])}
-   fill($('#check-fields'),fields);$('#check-results').hidden=false;UI.notify('检测完成，请查看各项结果');
+   fill($('#check-fields'),fields);$('#check-results').hidden=false;UI.notify(data.message?'检测未执行，请查看原因':'检测完成，请查看各项结果');
    // A new IP must not inherit metadata for the old address.
    for(const k of cache.keys())if(k.startsWith(id+'|'))cache.delete(k);
    await load();

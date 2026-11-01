@@ -123,11 +123,6 @@ func Run(ctx context.Context, path string) error {
 		seq++
 		tags, err := clash.Collect()
 		message := ""
-		if native != nil && err == nil {
-			if native.Collect(ctx, nativeInv, tags) != nil {
-				message = "native user stats unavailable"
-			}
-		}
 		if err != nil {
 			message = "Clash API unavailable"
 			tags = clash.UnavailableTags()
@@ -144,6 +139,16 @@ func Run(ctx context.Context, path string) error {
 			}
 		} else {
 			last = append([]model.Tag(nil), tags...)
+		}
+		// Native user counters do not depend on Clash snapshots being available.
+		// Recover only counters attested by the inventory; routes remain unknown.
+		if native != nil {
+			if native.Collect(ctx, nativeInv, tags) != nil {
+				if message != "" {
+					message += "; "
+				}
+				message += "native user stats unavailable"
+			}
 		}
 		for i := range tags {
 			if tags[i].Kind == "actual" {

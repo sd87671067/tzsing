@@ -23,6 +23,7 @@ type Native struct {
 	endpoint         string
 	previous, totals map[string]count
 	last             time.Time
+	bindings         map[string]string
 }
 
 func NewNative(endpoint string) (*Native, error) {
@@ -168,6 +169,7 @@ func (n *Native) Collect(ctx context.Context, inv *Inventory, tags []model.Tag) 
 	// The exporter attests that each username is globally unique and explicitly
 	// enabled in stats.users. The API key is authenticated metadata.User, not a guess.
 	byHash := map[string]count{}
+	present := map[string]uint8{}
 	for key, value := range values {
 		parts := strings.Split(key, ">>>")
 		if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
@@ -177,8 +179,10 @@ func (n *Native) Collect(ctx context.Context, inv *Inventory, tags []model.Tag) 
 		c := byHash[id]
 		if parts[3] == "uplink" {
 			c.up = value
+			present[id] |= 1
 		} else if parts[3] == "downlink" {
 			c.down = value
+			present[id] |= 2
 		}
 		byHash[id] = c
 	}
@@ -190,10 +194,31 @@ func (n *Native) Collect(ctx context.Context, inv *Inventory, tags []model.Tag) 
 			}
 		}
 	}
+	if n.bindings == nil {
+		n.bindings = map[string]string{}
+	}
 	for i := range tags {
 		t := &tags[i]
 		hash, ok := bindings[t.Name]
 		if !ok || t.AuthID == "" {
+			continue
+		}
+		binding := hash + "@" + inv.ConfigHash
+		if n.bindings[t.Name] != binding {
+			delete(n.previous, t.Name)
+			n.bindings[t.Name] = binding
+		}
+		// Counters are created lazily by the upstream tracker. An absent pair
+		// establishes a zero baseline, but does not prove this user is monitored.
+		// A partial pair is a broken response, never a zero in one direction.
+		if present[hash] != 3 {
+			t.Accounting = "unavailable"
+			t.Up, t.Down, t.Upload, t.Download, t.Active = nil, nil, nil, nil, nil
+			if present[hash] == 0 {
+				if _, seen := n.previous[t.Name]; !seen {
+					n.previous[t.Name] = count{}
+				}
+			}
 			continue
 		}
 		raw := byHash[hash]
@@ -216,11 +241,19 @@ func (n *Native) Collect(ctx context.Context, inv *Inventory, tags []model.Tag) 
 			down = float64(dd) / elapsed
 		}
 		t.Accounting = "native_user_observed"
+		t.State = "online"
 		t.Up = &up
 		t.Down = &down
 		t.Upload = &total.up
 		t.Download = &total.down
 		t.Active = nil
+	}
+	// Removed bindings cannot lend their baseline to a later identity reuse.
+	for key := range n.bindings {
+		if _, ok := bindings[key]; !ok {
+			delete(n.previous, key)
+			delete(n.bindings, key)
+		}
 	}
 	n.last = now
 	return nil

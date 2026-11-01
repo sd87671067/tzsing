@@ -36,3 +36,14 @@ VLESS 的管理单位是一个 UUID。可信宿主机清单将规范化 UUID（�
 
 
 版本依据：[VLESS 认证设置 metadata.User](https://github.com/SagerNet/sing-box/blob/v1.13.15/protocol/vless/inbound.go)、[Clash JSON 元数据](https://github.com/SagerNet/sing-box/blob/v1.13.15/experimental/clashapi/trafficontrol/tracker.go)、[原生用户计数器](https://github.com/SagerNet/sing-box/blob/v1.13.15/experimental/v2rayapi/stats.go)、[auth_user 路由匹配](https://sing-box.sagernet.org/configuration/route/rule/#auth_user)。
+
+
+## 2026-11-01 链路修复
+
+原生用户计数与 Clash 快照独立采集，Clash 不可用时仍能上报清单绑定的真实用户计数；出口与并发保持未知。上游懒创建计数器，双向均缺失时只建立基线、不宣称已验证零流量；单向缺失时不推进已有基线，不把另一方向补零。配置摘要或用户名绑定变化重新取基线，移除身份不能借用旧基线。
+
+前端将“已配置”和真实连接状态分开，监控断连或计量不可用时清空曲线，长采样间隔重新开始。没有可靠认证连接数时显示“活跃未知”，不能将 Agent 心跳显示成 UUID 在线。额度继续明确标记为提醒；没有将提醒额度宣称为执行额度。
+
+管理员目录新增逐项 capabilities（state、saved、effective、unit、reason）。当前所有限制 effective=false、saved=false，分别为 unsupported 或 disabled；候选预览独立记录尝试和成功/失败审计，不包含凭据。添加页复用原表单、分段选择、Modal、Toast 和主题 tokens，按四组组织；无执行器的项目以状态说明展示，不渲染假装可填写的数值/日期控件。
+
+本次明确未交付生产 UUID 限制执行器，详见 [执行状态与验收边界](UUID-EXECUTION-STATUS.md)。

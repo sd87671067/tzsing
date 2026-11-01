@@ -83,3 +83,13 @@ func TestUUIDPreviewIsReadOnlyEvenWithWriteEnabled(t *testing.T) {
 		t.Fatal("candidate credential returned")
 	}
 }
+
+func TestUUIDCapabilitiesNeverClaimSavedOrEffective(t *testing.T) {
+	caps := UUIDCatalog(uuidFixture())["capabilities"].(map[string]any)
+	for _, key := range []string{"quota", "upload_limit", "download_limit", "expires_at", "max_connections", "enabled", "outbound"} {
+		c, ok := caps[key].(map[string]any)
+		if !ok || c["saved"] != false || c["effective"] != false || c["reason"] == "" || (c["state"] != "unsupported" && c["state"] != "disabled") {
+			t.Fatalf("false execution capability: %s", key)
+		}
+	}
+}

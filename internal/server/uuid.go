@@ -57,5 +57,13 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 		return
 	}
 	out, status := a.hostControl(r.Context(), "uuid-preview", map[string]any{"node": v.Node})
+	result := "uuid_candidate_result:failed"
+	if status == 200 {
+		result = "uuid_candidate_result:passed"
+	}
+	if _, e := a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", result); e != nil {
+		fail(w, 500)
+		return
+	}
 	reply(w, status, out)
 }

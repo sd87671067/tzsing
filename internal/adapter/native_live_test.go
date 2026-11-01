@@ -122,7 +122,7 @@ func TestNativeTwelveUUIDRealityRoutingAndClosedTraffic(t *testing.T) {
 	for i, name := range names {
 		id := model.UUIDAuthID(fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1))
 		inv.Inbounds[0].NativeUsers[id] = model.AuthID(name)
-		tags = append(tags, model.Tag{Name: model.IdentityName("shared", id), AuthID: id, Accounting: "unavailable"})
+		tags = append(tags, model.Tag{Name: model.IdentityName("shared", id), AuthID: id, AuthScheme: "uuid-v1", InboundTag: "shared", Identity: "inbound", Type: "vless", Accounting: "unavailable"})
 	}
 	if e = meter.Collect(ctx, inv, tags); e != nil {
 		t.Fatal(e)
@@ -146,9 +146,9 @@ func TestNativeTwelveUUIDRealityRoutingAndClosedTraffic(t *testing.T) {
 				done <- fmt.Errorf("wrong routed peer %s", c.RemoteAddr())
 				return
 			}
-			b := make([]byte, 32768)
+			b := make([]byte, 32768+i*1024)
 			if _, e = io.ReadFull(c, b); e == nil {
-				_, e = c.Write(bytes.Repeat([]byte{7}, 65536))
+				_, e = c.Write(bytes.Repeat([]byte{7}, 65536+i*2048))
 			}
 			done <- e
 		}()
@@ -161,10 +161,10 @@ func TestNativeTwelveUUIDRealityRoutingAndClosedTraffic(t *testing.T) {
 			t.Fatal(e)
 		}
 		c.SetDeadline(time.Now().Add(5 * time.Second))
-		if _, e = c.Write(bytes.Repeat([]byte{3}, 32768)); e != nil {
+		if _, e = c.Write(bytes.Repeat([]byte{3}, 32768+i*1024)); e != nil {
 			t.Fatal(e)
 		}
-		if _, e = io.ReadFull(c, make([]byte, 65536)); e != nil {
+		if _, e = io.ReadFull(c, make([]byte, 65536+i*2048)); e != nil {
 			t.Fatal(e)
 		}
 		c.Close()
@@ -172,24 +172,52 @@ func TestNativeTwelveUUIDRealityRoutingAndClosedTraffic(t *testing.T) {
 			t.Fatal(e)
 		}
 		origin.Close()
+		if e = meter.Collect(ctx, inv, tags); e != nil {
+			t.Fatal(e)
+		}
+		for j, tag := range tags {
+			wantUp, wantDown := int64(0), int64(0)
+			if j <= i {
+				wantUp = int64(32768 + j*1024)
+				wantDown = int64(65536 + j*2048)
+			}
+			if j > i {
+				if tag.Upload != nil || tag.Accounting != "unavailable" {
+					t.Fatal("idle identity claimed verified traffic")
+				}
+				continue
+			}
+			if tag.Upload == nil || *tag.Upload != wantUp || tag.Download == nil || *tag.Download != wantDown || (j == i && (tag.Up == nil || *tag.Up <= 0)) {
+				t.Fatalf("independent real transfer %d affected identity %d", i, j)
+			}
+		}
+	}
+	if path := os.Getenv("TZSING_NATIVE_REPORT_FILE"); path != "" {
+		b, e := json.Marshal(tags)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(path, b, 0600); e != nil {
+			t.Fatal(e)
+		}
 	}
 	time.Sleep(100 * time.Millisecond)
 	stats, e := meter.Read(ctx)
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, name := range names {
-		if u, d := stats["user>>>"+name+">>>traffic>>>uplink"], stats["user>>>"+name+">>>traffic>>>downlink"]; u != 32768 || d != 65536 {
+	for i, name := range names {
+		if u, d := stats["user>>>"+name+">>>traffic>>>uplink"], stats["user>>>"+name+">>>traffic>>>downlink"]; u != int64(32768+i*1024) || d != int64(65536+i*2048) {
 			t.Fatalf("per-user exact payload %s: up=%d down=%d", name, u, d)
 		}
 	}
 	if e = meter.Collect(ctx, inv, tags); e != nil {
 		t.Fatal(e)
 	}
-	for _, tag := range tags {
-		if tag.Upload == nil || *tag.Upload != 32768 || tag.Download == nil || *tag.Download != 65536 || tag.Accounting != "native_user_observed" {
+	for i, tag := range tags {
+		if tag.Upload == nil || *tag.Upload != int64(32768+i*1024) || tag.Download == nil || *tag.Download != int64(65536+i*2048) || tag.Accounting != "native_user_observed" {
 			t.Fatal("native adapter attribution failed")
 		}
 	}
-	t.Log("12 REALITY UUIDs, one 443 listener, two independently verified outbound paths; all closed-connection counters exactly 32768/65536")
+	t.Log("12 REALITY UUIDs, one 443 listener, two independently verified outbound paths; distinct per-user closed-connection payloads exactly matched, no copying of totals")
 }
