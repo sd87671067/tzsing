@@ -5,12 +5,16 @@ Conditional matches contribute all possible routes; ambiguity stays explicit.
 """
 
 import hashlib
+import uuid
 
 def auth_id(name):
     return hashlib.sha256(name.encode()).hexdigest()
 
 def inbound_inventory(config):
     out = []
+    all_names = [u.get('name') for i in config.get('inbounds',[]) for u in i.get('users',[])]
+    stats = config.get('experimental',{}).get('v2ray_api',{}).get('stats',{})
+    stats_names = stats.get('users',[]) if stats.get('enabled') else []
     final = config.get('route', {}).get('final')
     if not final:
         final = next((o.get('tag') for o in config.get('outbounds', []) if o.get('tag')), None)
@@ -44,8 +48,31 @@ def inbound_inventory(config):
                 unknown = True
         users = inbound.get('users', [])
         names = [u.get('name') or u.get('username') for u in users]
-        # A missing/duplicate name cannot be a stable identity. Never hash credentials.
-        identities = sorted({auth_id(n) for n in names if isinstance(n, str) and n and names.count(n) == 1})
+        legacy = {}
+        native = {}
+        scheme = ''
+        if inbound.get('type') == 'vless':
+            scheme = 'uuid-v1'
+            def canonical_uuid(value):
+                try:
+                    return str(uuid.UUID(value)) if isinstance(value,str) and str(uuid.UUID(value)) == value.lower() else None
+                except (ValueError, AttributeError):
+                    return None
+            values = [canonical_uuid(u.get('uuid')) for u in users]
+            identities = []
+            for index, value in enumerate(values):
+                if value and values.count(value) == 1:
+                    identity = auth_id('vless-uuid-v1\x00'+value)
+                    identities.append(identity)
+                    name = names[index]
+                    if isinstance(name,str) and name and names.count(name) == 1:
+                        legacy[identity] = auth_id(name)
+                        if name in stats_names and all_names.count(name)==1 and '>>>' not in name:
+                            native[identity] = auth_id(name)
+            identities.sort()
+        else:
+            identities = sorted({auth_id(n) for n in names if isinstance(n, str) and n and names.count(n) == 1})
         out.append({'tag': tag, 'type': inbound['type'], 'routes': sorted(candidates), 'unknown': unknown,
-                    'auth_ids': identities, 'auth_count': len(users), 'auth_unsupported': len(users)-len(identities)})
+                    'auth_ids': identities, 'auth_scheme':scheme, 'legacy_auth_ids':legacy,
+                    'native_users': native, 'auth_count': len(users), 'auth_unsupported': len(users)-len(identities)})
     return out

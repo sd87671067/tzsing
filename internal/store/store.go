@@ -49,6 +49,7 @@ INSERT OR IGNORE INTO settings VALUES('sample_seconds',2),('retention_days',30),
 CREATE TABLE IF NOT EXISTS control_permissions(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,action TEXT NOT NULL CHECK(action IN ('change','restore','copy','import_shadowrocket','import_v2rayn','view')),PRIMARY KEY(user_id,action));
 CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 INSERT OR IGNORE INTO preferences VALUES('default_node_name','节点');
+CREATE TABLE IF NOT EXISTS identity_migrations(server TEXT NOT NULL,legacy TEXT NOT NULL,current TEXT NOT NULL,PRIMARY KEY(server,legacy),UNIQUE(server,current));
 CREATE TABLE IF NOT EXISTS nodes(id TEXT NOT NULL UNIQUE,server TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,tag TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',quota INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(server,tag));
 CREATE TABLE IF NOT EXISTS node_metadata(node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,expires_at INTEGER NOT NULL DEFAULT 0,billing_day INTEGER NOT NULL DEFAULT 1,timezone TEXT NOT NULL DEFAULT 'UTC',alert_threshold INTEGER NOT NULL DEFAULT 80);
 CREATE TABLE IF NOT EXISTS billing_usage(server TEXT NOT NULL,tag TEXT NOT NULL,start INTEGER NOT NULL,used INTEGER NOT NULL,PRIMARY KEY(server,tag,start));

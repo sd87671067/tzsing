@@ -1,6 +1,8 @@
 package model
 
 type Tag struct {
+	LegacyAuthID string `json:"legacy_auth_id,omitempty"`
+	AuthScheme   string `json:"auth_scheme,omitempty"`
 	AuthID       string `json:"auth_id,omitempty"`
 	Accounting   string `json:"accounting,omitempty"`
 	EgressType   string `json:"egress_type,omitempty"`

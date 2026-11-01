@@ -27,6 +27,10 @@ func (t *Tag) Classify() {
 		}
 		t.DisplayEligible = true
 		t.DisplayReason = "客户端入站"
+		if t.Type == "vless" && t.Accounting == "unattributed" {
+			t.DisplayEligible = false
+			t.DisplayReason = "共享入站流量保留用于诊断，不重复展示为 UUID 节点"
+		}
 		t.Verification = "never"
 		if t.IP != nil && t.IP.Verified && t.IP.Updated > 0 && (t.IP.IPv4 != "" || t.IP.IPv6 != "") {
 			t.Verification = "verified"

@@ -433,6 +433,11 @@ func (a *App) history(w http.ResponseWriter, r *http.Request, u store.User) {
 	reply(w, 200, out)
 }
 func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path string) {
+	switch path {
+	case "node-catalog", "node-preview", "node-create", "node-delete", "node-state":
+		a.uuidAdmin(w, r, u, path)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch path {
@@ -856,6 +861,10 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400)
 			return
 		}
+		if (t.AuthScheme != "" && t.AuthScheme != "uuid-v1") || (t.LegacyAuthID != "" && (t.AuthScheme != "uuid-v1" || t.AuthID == "" || !model.ValidAuthID(t.LegacyAuthID))) {
+			fail(w, 400)
+			return
+		}
 		seen[t.Name] = true
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -889,10 +898,14 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if e = store.MigrateUUIDIdentities(tx, v.ServerID, v.Tags); e != nil {
+		fail(w, 409)
+		return
+	}
 	for i := range v.Tags {
 		t := &v.Tags[i]
 		t.Classify()
-		if t.Kind != "actual" {
+		if t.Kind != "actual" || t.Accounting == "unavailable" {
 			t.Upload = nil
 			t.Download = nil
 			t.Up = nil

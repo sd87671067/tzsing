@@ -57,7 +57,14 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 		if in.UserField == "inboundUser" {
 			identities[in.Type+"/"+in.Tag] = map[string]string{}
 			for _, id := range in.AuthIDs {
-				identities[in.Type+"/"+in.Tag][id] = model.IdentityName(in.Tag, id)
+				userKey := id
+				if in.AuthScheme == "uuid-v1" {
+					userKey = in.LegacyAuthIDs[id]
+					if userKey == "" {
+						continue
+					}
+				}
+				identities[in.Type+"/"+in.Tag][userKey] = model.IdentityName(in.Tag, id)
 			}
 		}
 	}
@@ -118,12 +125,14 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			}
 		}
 		variants := []model.Tag{t}
-		if len(in.AuthIDs) > 0 {
+		if len(in.AuthIDs) > 0 || (in.Type == "vless" && in.AuthCount > 0) {
 			variants[0].Accounting = "unattributed"
 		}
 		for _, id := range in.AuthIDs {
 			u := t
 			u.AuthID = id
+			u.AuthScheme = in.AuthScheme
+			u.LegacyAuthID = in.LegacyAuthIDs[id]
 			u.Egress = ""
 			u.EgressType = ""
 			u.RouteReason = "认证身份的独立出站路径未验证"

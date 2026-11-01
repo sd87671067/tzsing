@@ -21,16 +21,17 @@ import (
 )
 
 type Config struct {
-	ServerID      string         `json:"server_id"`
-	Token         string         `json:"token"`
-	URL           string         `json:"url"`
-	CA            string         `json:"ca"`
-	ClashURL      string         `json:"clash_url"`
-	ClashSecret   string         `json:"clash_secret"`
-	Proxies       []egress.Proxy `json:"proxies"`
-	Sample        int            `json:"sample_seconds"`
-	ExitSeconds   int            `json:"exit_seconds"`
-	InventoryFile string         `json:"inventory_file"`
+	NativeStatsURL string         `json:"native_stats_url,omitempty"`
+	ServerID       string         `json:"server_id"`
+	Token          string         `json:"token"`
+	URL            string         `json:"url"`
+	CA             string         `json:"ca"`
+	ClashURL       string         `json:"clash_url"`
+	ClashSecret    string         `json:"clash_secret"`
+	Proxies        []egress.Proxy `json:"proxies"`
+	Sample         int            `json:"sample_seconds"`
+	ExitSeconds    int            `json:"exit_seconds"`
+	InventoryFile  string         `json:"inventory_file"`
 }
 
 func Run(ctx context.Context, path string) error {
@@ -71,6 +72,14 @@ func Run(ctx context.Context, path string) error {
 			c.Proxies = nil
 		}
 	}
+	var native *adapter.Native
+	var nativeInv *adapter.Inventory
+	if c.NativeStatsURL != "" {
+		native, e = adapter.NewNative(c.NativeStatsURL)
+		if e != nil {
+			return e
+		}
+	}
 	host := &collector.Collector{}
 	det := egress.New()
 	det.SetProxies(c.Proxies)
@@ -91,6 +100,7 @@ func Run(ctx context.Context, path string) error {
 				inv, err := adapter.ReadInventory(c.InventoryFile)
 				if err == nil {
 					clash.SetInventory(inv)
+					nativeInv = inv
 					routesVerified = inv.RoutesVerified
 					routeVersion = inv.ConfigHash
 					appliedExit = inv.AppliedExit
@@ -100,6 +110,7 @@ func Run(ctx context.Context, path string) error {
 						det.SetProxies(nil)
 					}
 				} else {
+					nativeInv = nil
 					log.Print("inventory unavailable; preserving identities with unknown routes")
 					clash.InvalidateInventory()
 					routesVerified = false
@@ -112,6 +123,11 @@ func Run(ctx context.Context, path string) error {
 		seq++
 		tags, err := clash.Collect()
 		message := ""
+		if native != nil && err == nil {
+			if native.Collect(ctx, nativeInv, tags) != nil {
+				message = "native user stats unavailable"
+			}
+		}
 		if err != nil {
 			message = "Clash API unavailable"
 			tags = clash.UnavailableTags()

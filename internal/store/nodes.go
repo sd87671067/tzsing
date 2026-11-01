@@ -104,6 +104,8 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.MonthDownload = 0
 		t.Quality = "authentication_unavailable"
 	}
+	t.LegacyAuthID = ""
+	t.AuthScheme = ""
 	t.GrantTag = ""
 	t.RawTag = ""
 	t.GlobalName = ""

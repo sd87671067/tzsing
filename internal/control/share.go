@@ -132,7 +132,7 @@ func IdentityInbound(in map[string]any, id string) (map[string]any, error) {
 		if name == "" {
 			name = text(user["username"])
 		}
-		if name != "" && model.AuthID(name) == id {
+		if (uuid(text(user["uuid"])) && model.UUIDAuthID(text(user["uuid"])) == id) || (name != "" && model.AuthID(name) == id) {
 			if selected != nil {
 				return nil, ErrScope
 			}

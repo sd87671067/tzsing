@@ -52,7 +52,7 @@ func TestAuthenticationEndToEndCountsPermissionsAndRecovery(t *testing.T) {
 			own = v
 		}
 	}
-	if len(own.Report.Tags) != 5 || own.Diagnostics.Reported != 5 || own.Diagnostics.BackendVisible != 5 || own.Diagnostics.Authorized != 5 {
+	if len(own.Report.Tags) != 4 || own.Diagnostics.Reported != 5 || own.Diagnostics.BackendVisible != 4 || own.Diagnostics.BackendFiltered != 1 || own.Diagnostics.Authorized != 4 {
 		t.Fatal("backend counts", own.Diagnostics)
 	}
 	var account model.Tag
@@ -86,13 +86,13 @@ func TestAuthenticationEndToEndCountsPermissionsAndRecovery(t *testing.T) {
 	}
 	d := f.db.MonitorDiagnostics
 	ds, _ := d(viewer)
-	if len(ds) != 2 || ds[0]["counts"].(*model.Diagnostics).PermissionFiltered != 4 {
+	if len(ds) != 2 || ds[0]["counts"].(*model.Diagnostics).PermissionFiltered != 3 {
 		t.Fatal("permission diagnostic", ds)
 	}
 	f.db.Exec("UPDATE servers SET seen=0 WHERE id='one'")
 	off, _ := f.db.Views(admin)
 	for _, v := range off {
-		if v.ID == "one" && (v.Online || len(v.Report.Tags) != 5) {
+		if v.ID == "one" && (v.Online || len(v.Report.Tags) != 4) {
 			t.Fatal("offline identities vanished")
 		}
 	}
@@ -111,7 +111,7 @@ func TestAuthenticationEndToEndCountsPermissionsAndRecovery(t *testing.T) {
 	f.db.Exec("INSERT INTO grants VALUES(2,'one','inbound:a')")
 	f.db.Exec("DELETE FROM grants WHERE user_id=2 AND tag=?", model.IdentityName("a", model.AuthID("alice")))
 	vv, _ = f.db.Views(viewer)
-	if len(vv[0].Report.Tags) != 1 || vv[0].Report.Tags[0].Accounting != "unattributed" {
+	if len(vv) != 0 {
 		t.Fatal("parent grant expanded")
 	}
 	f.db.Exec("DELETE FROM server_grants WHERE user_id=2")

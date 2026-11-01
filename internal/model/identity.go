@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 )
 
 func ValidAuthID(id string) bool {
@@ -23,3 +24,7 @@ func IdentityName(inbound, auth string) string {
 	sum := sha256.Sum256([]byte(inbound + "\x00" + auth))
 	return "identity:" + hex.EncodeToString(sum[:])
 }
+
+// UUIDAuthID is private inventory identity, never the public node ID. A UUID
+// rotation creates a new identity; labels and user names do not define accounts.
+func UUIDAuthID(uuid string) string { return AuthID("vless-uuid-v1\x00" + strings.ToLower(uuid)) }

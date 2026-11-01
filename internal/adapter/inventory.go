@@ -27,9 +27,12 @@ type Inventory struct {
 	RoutesVerified bool       `json:"routes_verified"`
 }
 type Inbound struct {
-	AuthIDs         []string `json:"auth_ids,omitempty"`
-	AuthCount       int      `json:"auth_count,omitempty"`
-	AuthUnsupported int      `json:"auth_unsupported,omitempty"`
+	NativeUsers     map[string]string `json:"native_users,omitempty"`
+	AuthScheme      string            `json:"auth_scheme,omitempty"`
+	LegacyAuthIDs   map[string]string `json:"legacy_auth_ids,omitempty"`
+	AuthIDs         []string          `json:"auth_ids,omitempty"`
+	AuthCount       int               `json:"auth_count,omitempty"`
+	AuthUnsupported int               `json:"auth_unsupported,omitempty"`
 	// Enabled only for a separately attested API extension. Standard sing-box Clash
 	// has no authentication identity field. Never infer identity from source/IP/chains.
 	UserField string   `json:"user_field,omitempty"`
@@ -56,6 +59,7 @@ func ReadInventory(path string) (*Inventory, error) {
 		return nil, fmt.Errorf("invalid outbound inventory")
 	}
 	seenIn := map[string]bool{}
+	nativeSeen := map[string]bool{}
 	discovered := 0
 	if len(v.Inbounds) > 512 {
 		return nil, fmt.Errorf("invalid inbound inventory")
@@ -69,6 +73,19 @@ func ReadInventory(path string) (*Inventory, error) {
 		if discovered > 512 {
 			return nil, fmt.Errorf("identity inventory exceeds report limit")
 		}
+		if i.AuthScheme != "" && i.AuthScheme != "uuid-v1" {
+			return nil, fmt.Errorf("invalid auth scheme")
+		}
+		for id, legacy := range i.NativeUsers {
+			if !model.ValidAuthID(id) || !model.ValidAuthID(legacy) {
+				return nil, fmt.Errorf("invalid native binding")
+			}
+		}
+		for id, legacy := range i.LegacyAuthIDs {
+			if !model.ValidAuthID(id) || !model.ValidAuthID(legacy) {
+				return nil, fmt.Errorf("invalid legacy identity")
+			}
+		}
 		ids := map[string]bool{}
 		if len(i.AuthIDs) > 512 || i.AuthCount < 0 || i.AuthUnsupported < 0 || (i.UserField != "" && i.UserField != "inboundUser") {
 			return nil, fmt.Errorf("invalid authentication inventory")
@@ -78,6 +95,12 @@ func ReadInventory(path string) (*Inventory, error) {
 				return nil, fmt.Errorf("invalid authentication identity")
 			}
 			ids[id] = true
+		}
+		for id, userHash := range i.NativeUsers {
+			if !ids[id] || i.AuthScheme != "uuid-v1" || nativeSeen[userHash] {
+				return nil, fmt.Errorf("ambiguous native identity")
+			}
+			nativeSeen[userHash] = true
 		}
 	}
 	seen := map[string]bool{}

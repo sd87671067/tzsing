@@ -55,15 +55,16 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
-	AuthID       string `json:"auth_id,omitempty"`
-	Source       string `json:"source,omitempty"`
-	PreviousIPv4 string `json:"previous_ipv4,omitempty"`
-	PreviousIPv6 string `json:"previous_ipv6,omitempty"`
-	Tag          string `json:"tag"`
-	Link         string `json:"link"`
-	Plan         string `json:"plan"`
-	Profile      string `json:"profile"`
-	Label        string `json:"label"`
+	Node         *UUIDNodeRequest `json:"node,omitempty"`
+	AuthID       string           `json:"auth_id,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	PreviousIPv4 string           `json:"previous_ipv4,omitempty"`
+	PreviousIPv6 string           `json:"previous_ipv6,omitempty"`
+	Tag          string           `json:"tag"`
+	Link         string           `json:"link"`
+	Plan         string           `json:"plan"`
+	Profile      string           `json:"profile"`
+	Label        string           `json:"label"`
 }
 type transaction struct {
 	Hash     string              `json:"hash"`
@@ -363,6 +364,28 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var config map[string]any
 	if e != nil || len(raw) > 4<<20 || json.Unmarshal(raw, &config) != nil {
 		fail(503, "配置不可用")
+		return
+	}
+	if r.URL.Path == "/uuid-catalog" {
+		json.NewEncoder(w).Encode(UUIDCatalog(raw))
+		return
+	}
+	if r.URL.Path == "/uuid-preview" {
+		if v.Node == nil {
+			fail(400, "缺少节点参数")
+			return
+		}
+		candidate, summary, err := UUIDCandidate(raw, *v.Node)
+		if err != nil {
+			fail(422, err.Error())
+			return
+		}
+		if err = c.check(candidate); err != nil {
+			fail(422, err.Error())
+			return
+		}
+		c.audit("uuid_candidate_checked", v.Node.Inbound)
+		json.NewEncoder(w).Encode(summary)
 		return
 	}
 	in := findInbound(config, v.Tag)

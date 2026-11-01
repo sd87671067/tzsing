@@ -39,7 +39,7 @@ func (s *Store) diagnose(u User, server string, r model.Report) *model.Diagnosti
 		}
 	}
 	if d.UnsupportedAuth > 0 {
-		d.Reasons["认证名称缺失或重复，无法稳定建模"] = d.UnsupportedAuth
+		d.Reasons["UUID 无效或重复，或旧协议认证名称不可用"] = d.UnsupportedAuth
 	}
 	return d
 }
