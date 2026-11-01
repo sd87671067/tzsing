@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"tzsingbox/internal/model"
 )
 
@@ -10,6 +11,29 @@ import (
 // Each legacy binding is consumed once, including when no old node exists.
 // Later UUID rotations or recycled user names never inherit the old grants.
 func MigrateUUIDIdentities(tx *sql.Tx, server string, tags []model.Tag) error {
+	// This function runs on every report. Already migrated nodes need one read,
+	// not three lookups per UUID per sample. The join requires both the journal
+	// and the current node, so an explicit legacy-key rollback still replays.
+	args := []any{server}
+	for _, t := range tags {
+		if t.AuthScheme != "uuid-v1" || t.LegacyAuthID == "" {
+			continue
+		}
+		if t.Identity != "inbound" || t.Type != "vless" || !model.ValidAuthID(t.AuthID) || !model.ValidAuthID(t.LegacyAuthID) {
+			return fmt.Errorf("invalid identity migration")
+		}
+		args = append(args, model.IdentityName(t.InboundTag, t.AuthID))
+	}
+	if len(args) > 1 {
+		var known int
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",")
+		if err := tx.QueryRow("SELECT count(DISTINCT n.tag) FROM nodes n JOIN identity_migrations m ON m.server=n.server AND m.current=n.tag WHERE n.server=? AND n.tag IN ("+placeholders+")", args...).Scan(&known); err != nil {
+			return err
+		}
+		if known == len(args)-1 {
+			return nil
+		}
+	}
 	seen := map[string]bool{}
 	for _, t := range tags {
 		if t.AuthScheme != "uuid-v1" || t.LegacyAuthID == "" {
