@@ -69,3 +69,21 @@ docker compose build web
 Go 1.24+，Linux amd64/arm64 可交叉构建；交叉构建不代表 ARM64 实机验收。网络/生产测试默认跳过，须显式 opt-in 和指定本地凭据路径。正式测试目标受操作者环境约定约束，不应自动使用任何其他业务仓库或生产数据库。
 
 更新前保留旧健康镜像、二进制、配置及 SQLite 在线一致性备份；只更新本项目容器/Agent，禁止 prune 或覆盖历史库。检查 HTTPS、容器、Agent、数据库完整性、授权及实际节点数后再完成部署。回滚镜像应使用独立 Compose override 指向旧镜像并 `--no-build` 启动，默认保留现有数据库。涉及权限语义变化时，先验证旧版本能执行当前权限；不通过恢复旧授权/旧数据库绕过撤权。备份数据库不是自动回滚步骤。
+
+## 安全升级与环境配置
+
+`.env.example` 列出非敏感环境变量：`PUBLIC_ORIGIN`、`URL_PREFIX`、`TRUSTED_PROXY`、`CONTROL_SOCKET` 和 `CONTROL_SERVER`。实际 `.env`、`secrets/`、Agent JSON、控制器配置和 SQLite 仅保存在部署主机，不能提交。TLS 私钥按最小读取权限挂载；Agent/IPinfo Token 使用权限受限的文件，不通过浏览器或公开配置传递。
+
+升级前在线备份 SQLite（使用 SQLite backup API，不能只复制运行中的 WAL 主文件），备份本项目配置并记录旧健康镜像。确认迁移兼容性后执行：
+
+```sh
+git fetch origin main
+git merge --ff-only origin/main
+docker compose build web
+docker compose up -d --no-deps --no-build web
+docker compose ps
+```
+
+仅更新 tzsing 自身组件；Agent 二进制更新应保留旧版本和自身服务回滚路径。数据库回滚不应自动覆盖升级后产生的历史和授权记录。
+
+生产配置可能同时由其他工具改写。即使每个工具原子写入，未共享独占锁和版本校验仍会丢失更新；因此不能仅靠隔离测试通过启用写入。存在不协调写入者时，必须保持 `write_enabled=false`，后端拒绝更换/恢复，保留链接解析、脱敏预览、分享和配置校验。推荐此模式下 systemd 只读限制生产配置目录并阻止访问宿主机服务管理 socket。控制器即使发现中断事务，也拒绝在写入关闭时恢复生产配置，保留记录等待操作者处理。校验临时文件存放在控制器私有状态目录。

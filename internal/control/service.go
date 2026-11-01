@@ -110,7 +110,7 @@ func (c *Controller) check(b []byte) error {
 	if c.Hooks != nil && c.Hooks.Check != nil {
 		return c.Hooks.Check(b)
 	}
-	f, e := os.CreateTemp(filepath.Dir(c.Config.Config), ".tzsing-check-*.json")
+	f, e := os.CreateTemp(c.Config.State, ".tzsing-check-*.json")
 	if e != nil {
 		return e
 	}
@@ -473,6 +473,9 @@ func RunController(ctx context.Context, path string) error {
 	// An interrupted application is recovered before accepting any new operation.
 	txPath := filepath.Join(cfg.State, "transaction.json")
 	if b, e := os.ReadFile(txPath); e == nil {
+		if !cfg.WriteEnabled {
+			return errors.New("生产配置写入未启用；保留中断事务，禁止自动恢复")
+		}
 		var tx transaction
 		if json.Unmarshal(b, &tx) != nil || digest(tx.Before) != tx.Hash {
 			return errors.New("中断事务备份无效")

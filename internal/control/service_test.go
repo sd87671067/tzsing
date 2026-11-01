@@ -1,9 +1,12 @@
 package control
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,5 +89,41 @@ func TestApplyValidationCASFailureAndAutomaticRollback(t *testing.T) {
 				t.Fatal("transaction not resolved")
 			}
 		})
+	}
+}
+
+func TestDisabledControllerPreservesInterruptedTransaction(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "production.json")
+	before := []byte(`{"inbounds":[],"outbounds":[]}`)
+	after := []byte(`{"inbounds":[],"outbounds":[{"type":"direct"}]}`)
+	if err := os.WriteFile(config, after, 0600); err != nil {
+		t.Fatal(err)
+	}
+	tx := filepath.Join(dir, "transaction.json")
+	record, _ := json.Marshal(transaction{Hash: digest(before), After: digest(after), Before: before})
+	if err := os.WriteFile(tx, record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ServiceConfig{Config: config, State: dir, Socket: filepath.Join(dir, "control.sock"), Binary: "/usr/local/bin/sing-box", Unit: "sing-box.service", WriteEnabled: false}
+	data, _ := json.Marshal(cfg)
+	path := filepath.Join(dir, "controller.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := RunController(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "禁止自动恢复") {
+		t.Fatalf("expected disabled recovery rejection: %v", err)
+	}
+	got, err := os.ReadFile(config)
+	if err != nil || string(got) != string(after) {
+		t.Fatal("production config changed", err)
+	}
+	got, err = os.ReadFile(tx)
+	if err != nil || string(got) != string(record) {
+		t.Fatal("recovery record changed", err)
+	}
+	if _, err = os.Stat(cfg.Socket); !os.IsNotExist(err) {
+		t.Fatal("controller must not accept operations")
 	}
 }
