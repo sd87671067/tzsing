@@ -10,7 +10,9 @@ import (
 )
 
 type Connection struct {
-	Metadata struct {
+	Rule       string `json:"rule"`
+	Attributed string `json:"-"`
+	Metadata   struct {
 		Type        string `json:"type"`
 		InboundUser string `json:"inboundUser,omitempty"`
 	} `json:"metadata"`

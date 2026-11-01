@@ -857,7 +857,7 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) {
 	}
 	seen := map[string]bool{}
 	for _, t := range v.Tags {
-		if (t.Identity == "inbound" && (!validTag(t.InboundTag) || t.Name != model.IdentityName(t.InboundTag, t.AuthID) || (t.AuthID != "" && !model.ValidAuthID(t.AuthID)))) || (t.Identity != "inbound" && !validTag(t.Name)) || seen[t.Name] || len(t.Type) > 64 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
+		if (t.Identity == "inbound" && (!validTag(t.InboundTag) || t.Name != model.IdentityName(t.InboundTag, t.AuthID) || (t.AuthID != "" && !model.ValidAuthID(t.AuthID)))) || (t.Identity != "inbound" && !validTag(t.Name)) || seen[t.Name] || len(t.Type) > 64 || len([]rune(t.AuthName)) > 128 || len(t.AccountingReason) > 1024 || len(t.Egress) > 128 || (t.Upload != nil && *t.Upload < 0) || (t.Download != nil && *t.Download < 0) {
 			fail(w, 400)
 			return
 		}

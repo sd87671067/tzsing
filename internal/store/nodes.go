@@ -21,6 +21,7 @@ func (s *Store) DefaultName() string {
 // leaves this boundary for viewers when disclosure is disabled.
 func (s *Store) Present(u User, server string, t *model.Tag) error {
 	raw := t.Name
+	configName := t.AuthName
 	// Restore only attested last-good exits; old independent SOCKS probes are not trusted.
 	t.Classify()
 	if t.IP == nil || !t.IP.Verified || t.IP.Error != "" {
@@ -85,12 +86,15 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	s.QueryRow("SELECT name FROM aliases WHERE user_id=? AND node_id=?", u.ID, t.ID).Scan(&personal)
 	t.Name = global
 	if t.Name == "" {
+		t.Name = t.AuthName
+	}
+	if t.Name == "" {
 		t.Name = fmt.Sprintf("%s %02d", s.DefaultName(), number)
 	}
 	if personal != "" {
 		t.Name = personal
 	}
-	t.FallbackName = global == "" && personal == ""
+	t.FallbackName = global == "" && personal == "" && t.AuthName == ""
 	if t.Accounting == "unavailable" {
 		t.Up = nil
 		t.Down = nil
@@ -104,6 +108,7 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.MonthDownload = 0
 		t.Quality = "authentication_unavailable"
 	}
+	t.AuthName = ""
 	t.LegacyAuthID = ""
 	t.AuthScheme = ""
 	t.GrantTag = ""
@@ -120,7 +125,7 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	if u.Role == "admin" {
 		t.GrantTag = raw
 		t.GlobalName = global
-		t.NeedsName = global == ""
+		t.NeedsName = global == "" && configName == ""
 	}
 	if t.Identity == "inbound" {
 		if !show {

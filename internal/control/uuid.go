@@ -41,10 +41,10 @@ func realityInbound(in map[string]any) bool {
 func UUIDCapabilities() map[string]any {
 	capabilities := map[string]any{}
 	for _, v := range []struct{ key, unit, state, reason string }{
-		{"quota", "GiB", "unsupported", "缺少持久、完整的 UUID 计量和超额封禁执行器；现有额度仅作提醒。0 表示不限额。"},
+		{"quota", "GiB", "unsupported", "缺少持久、完整的 UUID 计量和超额封禁执行器；已移除提醒设置。0 表示不限额。"},
 		{"upload_limit", "MiB/s", "unsupported", "sing-box 1.13.15 VLESS 没有逐用户上传限速；认证后的数据路径执行器尚未接入。0 表示不限速。"},
 		{"download_limit", "MiB/s", "unsupported", "sing-box 1.13.15 VLESS 没有逐用户下载限速；认证后的数据路径执行器尚未接入。0 表示不限速。"},
-		{"expires_at", "本地时间", "disabled", "到期认证停用执行器未接入；生产配置重载可能断流，存在外部写入冲突。当前仅有到期提醒。"},
+		{"expires_at", "本地时间", "disabled", "到期认证停用执行器未接入；生产配置重载可能断流，存在外部写入冲突。已移除提醒设置。"},
 		{"max_connections", "连接数", "unsupported", "没有认证后逐 UUID 的连接准入执行器；原生用户流量计数不提供并发连接数。0 表示不限，不代表设备数。"},
 		{"enabled", "", "disabled", "生产逐 UUID 启停关闭；清单中存在不代表当前有连接或可通过所有路由策略。"},
 		{"outbound", "", "disabled", "允许校验原路由、直连和中转候选；生产逐 UUID 路由写入关闭。"},

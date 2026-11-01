@@ -22,7 +22,9 @@ class InboundRoutes(unittest.TestCase):
         c['inbounds'][0]['users'][0]['uuid']='33333333-3333-4333-8333-333333333333'
         b=inbound_inventory(c)[0]
         self.assertNotEqual(a['auth_ids'],b['auth_ids']);self.assertEqual(a['auth_count'],2);self.assertEqual(a['auth_unsupported'],0)
-        self.assertNotIn('11111111',str(a));self.assertNotIn('one',str(a))
+        self.assertNotIn('11111111',str(a));self.assertEqual(list(a['auth_names'].values()),['one'])
+        protected = {k:v for k,v in a.items() if k != 'auth_names'}
+        self.assertNotIn('one',str(protected))
     def test_duplicate_uuid_never_merged_or_misattributed(self):
         c=self.config([]);c['inbounds'][0]['users']=[{'name':n,'uuid':'11111111-1111-4111-8111-111111111111'} for n in ('a','b')]
         a=inbound_inventory(c)[0];self.assertEqual(a['auth_ids'],[]);self.assertEqual(a['auth_unsupported'],2)

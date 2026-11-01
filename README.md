@@ -1,3 +1,5 @@
+> 本轮 UUID 实时流量及限制执行状态见 [UUID 实时身份归属](docs/UUID-LIVE-MAPPING.md)。已接入完整认证路由规则映射；统计为已观测下界。独立限制、启停与删除尚未在生产生效。
+
 # tzsingbox
 
 轻量、多服务器 sing-box 入站监控与受限节点管理。Go + 原生 JavaScript/CSS/Canvas + SQLite WAL + WebSocket；无 Vue、React 或 Node.js 构建/常驻依赖。中心服务以 UID 65532 在只读 distroless 容器内运行，宿主机 Go Agent 使用独立受限身份。

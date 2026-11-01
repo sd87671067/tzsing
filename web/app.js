@@ -5,7 +5,7 @@ const bytes=v=>v==null?NA:(v<1024?v.toFixed(0)+' B':v<1048576?(v/1024).toFixed(1
 const rate=v=>v==null?NA:bytes(v)+'/s';const when=v=>v?new Date(v*1000).toLocaleString():NA;const pct=(a,b)=>b?Math.round(a/b*100)+'%':NA;
 function message(s){UI.notify(s)}
 async function api(path,method='GET',body){const res=await fetch(prefix+'/api/'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body===undefined?undefined:JSON.stringify(body)});let data;try{data=await res.json()}catch{throw Error('无效服务响应')};if(!res.ok){if(res.status===401&&path!=='login')loggedOut();throw Error(typeof data.error==='string'&&!['Unauthorized','Forbidden','Bad Request','Internal Server Error'].includes(data.error)?data.error:res.status===401?'账号、密码错误或登录已过期':res.status===403?'无访问权限':res.status===429?'请求过于频繁，请稍后重试':'操作失败（'+res.status+'）')};return data}
-function loggedOut(){UI.invalidate();NodeControl.invalidate();UUIDEditor.clear();me=null;csrf='';clearTimeout(retry);if(socket){socket.onclose=null;socket.close();socket=null}$('#login').hidden=false;$('#dashboard').hidden=true;$('#logout').hidden=true;$$('[data-admin]').forEach(el=>el.hidden=true);text($('#connection'),'未登录');$('#servers').replaceChildren();$('#tags').replaceChildren();for(const r of rows.values()){cancelAnimationFrame(r.upload.frame);cancelAnimationFrame(r.download.frame);Charts.remove(r.spark)}for(const c of cards.values())removeServerCard(c);cards.clear();rows.clear();rangeCache.clear();views=[];points.length=0;$('#server-token').textContent='';closeDetails();historyRows=[]}
+function loggedOut(){UI.invalidate();NodeControl.invalidate();UUIDEditor.clear();me=null;csrf='';clearTimeout(retry);if(socket){socket.onclose=null;socket.close();socket=null}$('#login').hidden=false;$('#dashboard').hidden=true;$('#logout').hidden=true;$$('[data-admin]').forEach(el=>el.hidden=true);text($('#connection'),'未登录');$('#servers').replaceChildren();$('#tags').replaceChildren();for(const r of rows.values()){cancelAnimationFrame(r.upload.frame);cancelAnimationFrame(r.download.frame);Charts.remove(r.spark)}for(const c of cards.values())removeServerCard(c);cards.clear();rows.clear();rangeCache.clear();views=[];points.length=0;adminRows.clear();$('#node-admin-list').replaceChildren();$('#server-token').textContent='';closeDetails();historyRows=[]}
 function connected(){if(!me)return;clearTimeout(retry);socket=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+prefix+'/ws');socket.onopen=()=>{text($('#connection'),'实时连接');$('#connection').dataset.state='online'};socket.onmessage=e=>{try{update(JSON.parse(e.data))}catch{message('监控数据格式错误')}};socket.onclose=()=>{update([]);rangeCache.clear();text($('#connection'),'连接中断 · 自动重连中');$('#connection').dataset.state='offline';api('me').then(d=>{csrf=d.csrf;me=d.user;if(me.role!=='admin'){NodeControl.invalidate();UUIDEditor.clear();}retry=setTimeout(connected,2000)}).catch(()=>{})};}
 function signedIn(d){me=d.user;csrf=d.csrf;$('#login-form').reset();$('#login').hidden=true;$('#dashboard').hidden=false;$('#logout').hidden=false;$$('[data-admin]').forEach(el=>el.hidden=me.role!=='admin');$('#admin').hidden=true;$('#overview').hidden=false;api('snapshot').then(update).catch(e=>message(e.message));connected()}
 $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target),b=e.target.querySelector('button');b.disabled=true;try{signedIn(await api('login','POST',Object.fromEntries(f)))}catch(e){message(e.message)}finally{b.disabled=false}});
@@ -75,9 +75,9 @@ function update(data){
    r.arrow.hidden=me?.role!=='admin';text(r.name,t.name);r.name.title=t.name;text(r.category,protocolName(t.type));r.category.title=t.category;text(r.status,!s.online?'监控离线':t.active==null?'活跃未知':t.active>0?'连接 '+t.active:'空闲');r.status.dataset.state=s.online&&t.active>0?'online':'';r.status.title='当前真实连接数；清单中存在不代表启用状态已验证';
    text(r.raw,'已配置'+(t.raw_tag?' · Tag · '+t.raw_tag:''));r.raw.hidden=false;
    r.upload.parentElement.hidden=t.accounting==='unavailable';smoothRate(r.upload,measured?t.up:null,'↑ ');smoothRate(r.download,measured?t.down:null,'↓ ');
-   text(r.quota,t.accounting==='unavailable'?'UUID 计量不可用':'本月 '+bytes(t.month_used)+(t.quota?' / 提醒额度 '+bytes(t.quota)+' · 剩余 '+bytes(t.month_used==null?null:Math.max(0,t.quota-t.month_used)):' · 未设额度提醒'));r.meter.value=t.quota&&t.month_used!=null?Math.min(1,t.month_used/t.quota):0;r.meter.hidden=!t.quota||t.month_used==null;r.meter.setAttribute('aria-label','月额度使用比例');
+   text(r.quota,t.accounting==='unavailable'?'UUID 计量不可用':'本月 '+bytes(t.month_used)+(t.quota?' / 额度未生效 '+bytes(t.quota)+' · 剩余 '+bytes(t.month_used==null?null:Math.max(0,t.quota-t.month_used)):' · 已观测用量'));r.meter.value=t.quota&&t.month_used!=null?Math.min(1,t.month_used/t.quota):0;r.meter.hidden=!t.quota||t.month_used==null;r.meter.setAttribute('aria-label','月额度使用比例');
    const ipLabel=[t.category,countryName(t.ip),t.ip?.ipv4||t.ip?.ipv6,t.ip?.org,t.ip&&(t.verification==='stale'?'缓存 · 待验证':'已验证')].filter(Boolean).join(' · ');text(r.ip,ipLabel||'查看 IP 与流量详情');r.ip.hidden=false;
-   text(r.expiry,t.expires_at?'到期提醒 '+new Date(t.expires_at*1000).toLocaleDateString('zh-CN'):'');r.expiry.hidden=!t.expires_at;
+   text(r.expiry,t.expires_at?'到期设置未生效 '+new Date(t.expires_at*1000).toLocaleDateString('zh-CN'):'');r.expiry.hidden=!t.expires_at;
    r.meter.dataset.warning=t.quota&&t.month_used/t.quota*100>=(t.alert_threshold||80)?'true':'false';
 
   }
@@ -85,7 +85,7 @@ function update(data){
  for(const[k,v]of cards)if(!liveCards.has(k)){removeServerCard(v);v.el.remove();cards.delete(k)}
  for(const[k,v]of rows)if(!liveRows.has(k)){cancelAnimationFrame(v.upload.frame);cancelAnimationFrame(v.download.frame);Charts.remove(v.spark);v.el.remove();rows.delete(k)}
  for(const s of data){const c=cards.get(s.id);if(c?.diagnostics&&s.diagnostics){const d=s.diagnostics;const count=[...rows.values()].filter(r=>r.s.id===s.id&&!r.el.hidden).length;text(c.diagnosticText,diagnosticText(d,count))}}
- NodeControl.reconcile();sortNodes();
+ NodeControl.reconcile();sortNodes();if(currentPage==='nodes')renderNodeAdmin(data);
  $('#empty').hidden=[...rows.values()].some(r=>!r.el.hidden);
  const options=Array.from($('#server-filter').options).map(o=>o.value).slice(1);
  if(options.join()!==data.map(s=>s.id).join()){const sel=$('#server-filter');sel.replaceChildren(new Option('全部服务器',''));data.forEach(s=>sel.add(new Option(s.name,s.id)));sel.value=filter}
@@ -114,11 +114,11 @@ const protocolName=t=>({vless:'VLESS',vmess:'VMess',trojan:'Trojan',socks:'SOCKS
 function renderDetails(r){
  const t=r.t;text($('#history-title'),t.name+' · IP 信息');text($('#detail-raw'),t.raw_tag?'Tag · '+t.raw_tag:'');$('#detail-raw').hidden=!t.raw_tag;
  text($('#detail-status'),r.s.name+' · '+t.category+' · '+protocolName(t.type)+' · 当前连接 '+(t.active??NA)+(t.identity==='inbound'?' · '+(t.egress?'出站 '+t.egress:t.route_reason||'出口未知'):''));
- text($('#detail-flow'),t.accounting==='unavailable'?'没有可用的 UUID 认证计量数据；Clash 标准接口缺少用户身份，原生用户计数未接入或不可用。':!r.s.online?'监控离线；历史为已观测用量。':'实时 ↑ '+rate(t.up)+' / ↓ '+rate(t.down)+(t.accounting==='native_user_observed'?' · 原生认证用户计数，非完整账单':''));
+ text($('#detail-flow'),t.accounting==='unavailable'?(t.accounting_reason||'没有可用的 UUID 认证计量数据；当前连接未提供可验证的身份映射。'):!r.s.online?'监控离线；历史为已观测用量。':'实时 ↑ '+rate(t.up)+' / ↓ '+rate(t.down)+' · '+(t.accounting_reason||'原生认证用户计数，非完整账单'));
  const totals=[['今日',t.today_upload,t.today_download],['本月',t.month_upload,t.month_download],['累计',t.upload,t.download]].map(v=>t.accounting==='unavailable'?[v[0],null,null]:v);
  const group=$('#detail-totals');for(let i=0;i<totals.length;i++){let cell=group.children[i];if(!cell){cell=node('div','stat-cell');cell.append(node('span'),node('strong'),node('small'));group.append(cell)}text(cell.children[0],totals[i][0]);text(cell.children[1],bytes(totals[i][1]==null||totals[i][2]==null?null:totals[i][1]+totals[i][2]));text(cell.children[2],'↑ '+bytes(totals[i][1])+' · ↓ '+bytes(totals[i][2]))}
  text($('#detail-quota'),t.quota?'本账期 '+bytes(t.month_used)+' / '+bytes(t.quota)+' · 剩余 '+bytes(t.month_used==null?null:Math.max(0,t.quota-t.month_used))+' · 每月 '+t.billing_day+' 日 / '+t.timezone:'');$('#detail-quota').hidden=!t.quota;
- text($('#detail-expiry'),t.expires_at?'到期时间 '+when(t.expires_at)+'（仅提醒）':'');$('#detail-expiry').hidden=!t.expires_at;
+ text($('#detail-expiry'),t.expires_at?'到期时间 '+when(t.expires_at)+'（未生效）':'');$('#detail-expiry').hidden=!t.expires_at;
  $('#ip-section').hidden=false;
  NodeInspect.render(r);
  $('#detail-admin').hidden=me?.role!=='admin';
@@ -163,18 +163,22 @@ $('#server-form').onsubmit=e=>{e.preventDefault();action(async()=>{const v=await
 $('#settings-form').onsubmit=e=>{e.preventDefault();const v=Object.fromEntries(new FormData(e.target));action(()=>api('admin/settings','PUT',{sample_seconds:Number(v.sample_seconds),retention_days:Number(v.retention_days),show_raw_tag:e.target.elements.show_raw_tag.checked,show_expiry:e.target.elements.show_expiry.checked,show_quota:e.target.elements.show_quota.checked,default_node_name:v.default_node_name}))};
 let resize;window.addEventListener('resize',()=>{clearTimeout(resize);resize=setTimeout(()=>{Charts.invalidate()},180)});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&views.length)update(views)});api('me').then(signedIn).catch(()=>{});
 
-async function loadNodeAdmin(){
- const data=await api('admin/nodes');$('#node-admin-list').replaceChildren();let missing=0;
- const query=$('#admin-node-search').value.trim().toLocaleLowerCase(),sort=$('#admin-node-sort').value;
- const entries=data.flatMap(server=>(server.report?.tags||[]).map(t=>({server,t}))).filter(({server,t})=>!(t.type==='vless'&&t.accounting==='unattributed')&&(!query||(server.name+' '+t.name).toLocaleLowerCase().includes(query)));
- entries.sort((a,b)=>sort==='name'?a.t.name.localeCompare(b.t.name,'zh-CN'):sort==='month'?(b.t.month_used??-1)-(a.t.month_used??-1):a.server.name.localeCompare(b.server.name,'zh-CN'));
+const adminRows=new Map();let adminNodeViews=[];
+async function loadNodeAdmin(){adminNodeViews=await api('admin/nodes');renderNodeAdmin(adminNodeViews)}
+function renderNodeAdmin(data){
+ adminNodeViews=data;const query=$('#admin-node-search').value.trim().toLocaleLowerCase(),sort=$('#admin-node-sort').value;
+ const entries=data.flatMap(server=>(server.report?.tags||[]).map(t=>({server,t}))).filter(({t})=>t.identity==='inbound'&&!(t.type==='vless'&&!t.auth_id));
+ entries.sort((a,b)=>sort==='name'?a.t.name.localeCompare(b.t.name,'zh-CN'):sort==='month'?(b.t.month_used??-1)-(a.t.month_used??-1):0);
+ const live=new Set(),parent=$('#node-admin-list');let pos=0;
  for(const {server,t} of entries){
-  if(t.needs_name)missing++;
-  const f=node('form','node-admin-form'),title=node('strong','',server.name+' · '+t.name+' · '+protocolName(t.type)),label=node('label','','全局中文名称'),name=node('input'),ql=node('label','','月额度提醒（GiB，0 无限制；不自动停用）'),quota=node('input'),save=node('button','primary','保存节点');name.value=t.global_name||'';name.maxLength=128;name.placeholder=t.name;name.setAttribute('aria-label','全局中文名称');quota.type='number';quota.min=0;quota.max=1073741824;quota.step='0.01';quota.value=((t.quota||0)/1073741824).toFixed(2);label.append(name);ql.append(quota);f.append(title,label,ql,save);const extra={};for(const [key,labelText,type,value] of [['expires_at','到期提醒（本地时区；不自动停用）','datetime-local',t.expires_at?new Date(t.expires_at*1000-new Date(t.expires_at*1000).getTimezoneOffset()*60000).toISOString().slice(0,16):''],['billing_day','每月账期起始日（1–31）','number',t.billing_day||1],['timezone','账期时区（IANA）','text',t.timezone||'UTC'],['alert_threshold','额度提醒阈值（%）','number',t.alert_threshold||80]]){const l=node('label','',labelText),input=node('input');input.type=type;input.value=value;if(type==='number'){input.min=1;input.max=key==='billing_day'?31:100}input.setAttribute('aria-label',labelText);extra[key]=input;l.append(input);f.insertBefore(l,save)}
-  if(t.ip?.error||t.ip?.quality_error){const d=node('p','muted','探针诊断：'+[t.ip.error,t.ip.quality_error].filter(Boolean).join(' · '));f.insertBefore(d,save)}
-  f.onsubmit=e=>{e.preventDefault();action(()=>api('admin/nodes','PUT',{node_id:t.id,name:name.value,quota:Math.round(Number(quota.value)*1073741824),expires_at:extra.expires_at.value?Math.floor(new Date(extra.expires_at.value).getTime()/1000):0,billing_day:Number(extra.billing_day.value),timezone:extra.timezone.value.trim(),alert_threshold:Number(extra.alert_threshold.value)}))};$('#node-admin-list').append(f)
+  live.add(t.id);let r=adminRows.get(t.id);
+  if(!r){const el=node('article','card card--node node-admin-row'),name=node('strong','admin-node-name'),protocol=node('span','pill'),status=node('span','pill'),up=node('span','admin-node-up'),down=node('span','admin-node-down'),month=node('span','admin-node-month'),expiry=node('span','admin-node-expiry'),more=UI.button('节点操作','more');el.tabIndex=0;el.setAttribute('aria-haspopup','dialog');el.append(name,protocol,status,up,down,month,expiry,more);el.onclick=e=>{if(!e.target.closest('button'))showHistory(t.id)};el.onkeydown=e=>{if(e.target===el&&['Enter',' '].includes(e.key)){e.preventDefault();showHistory(t.id)}};more.onclick=e=>{e.stopPropagation();NodeControl.show(t.id,more)};r={el,name,protocol,status,up,down,month,expiry,more};adminRows.set(t.id,r)}
+  text(r.name,t.name);r.name.title=server.name+' · '+t.name;text(r.protocol,protocolName(t.type));text(r.status,!server.online?'监控离线':t.active==null?'连接未知':t.active?'连接 '+t.active:'空闲');
+  text(r.up,'↑ '+rate(server.online?t.up:null));text(r.down,'↓ '+rate(server.online?t.down:null));text(r.month,'本月 '+bytes(t.month_used));r.month.title=t.accounting_reason||'已观测用量';text(r.expiry,t.expires_at?'到期未生效':'永不过期');r.expiry.title=t.expires_at?when(t.expires_at)+'，执行器未接入':'';r.el.hidden=!!query&&!(server.name+' '+t.name).toLocaleLowerCase().includes(query);r.el.setAttribute('aria-label',t.name+' · '+protocolName(t.type));r.more.setAttribute('aria-label',t.name+' 节点操作');
+  if(parent.children[pos]!==r.el)parent.insertBefore(r.el,parent.children[pos]||null);pos++;
  }
- text($('#name-warning'),missing?'有 '+missing+' 个节点尚未设置全局名称，当前使用友好默认名；请补充中文名称。':'所有节点均已设置全局名称。');
+ for(const [id,r] of adminRows)if(!live.has(id)){r.el.remove();adminRows.delete(id)}
+ text($('#name-warning'),'每个 UUID 独立显示；流量为真实连接快照的已观测用量。生产独立限制、启停和删除尚不可用。');
 }
 
 $('#change-password').onclick=()=>{
@@ -185,4 +189,4 @@ $('#change-password').onclick=()=>{
  f.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;try{await api('password','POST',{current:old.value,password:pass.value});old.value=pass.value='';m.force();loggedOut();message('密码已更新，请重新登录')}catch(e){message(e.message)}finally{save.disabled=false}};
 };
 
-$('#admin-node-search').oninput=loadNodeAdmin;$('#admin-node-sort').onchange=loadNodeAdmin;
+$('#admin-node-search').oninput=()=>renderNodeAdmin(adminNodeViews);$('#admin-node-sort').onchange=()=>renderNodeAdmin(adminNodeViews);

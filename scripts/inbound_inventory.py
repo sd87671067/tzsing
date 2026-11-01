@@ -1,11 +1,12 @@
 """Conservative route analysis. Every configured inbound tag is an identity.
 Credentials and listen addresses never enter inventory. Named authentication
-users are exported only as stable digests; UUID/password rotation preserves IDs.
+users are exported only as stable digests; VLESS UUIDs define stable identities; names are mutable display labels.
 Conditional matches contribute all possible routes; ambiguity stays explicit.
 """
 
 import hashlib
 import uuid
+import re
 
 def auth_id(name):
     return hashlib.sha256(name.encode()).hexdigest()
@@ -49,6 +50,8 @@ def inbound_inventory(config):
         users = inbound.get('users', [])
         names = [u.get('name') or u.get('username') for u in users]
         legacy = {}
+        labels = {}
+        bindings = {}
         native = {}
         scheme = ''
         if inbound.get('type') == 'vless':
@@ -65,8 +68,22 @@ def inbound_inventory(config):
                     identity = auth_id('vless-uuid-v1\x00'+value)
                     identities.append(identity)
                     name = names[index]
+                    if isinstance(name, str) and name:
+                        labels[identity] = name[:128]
                     if isinstance(name,str) and name and names.count(name) == 1:
                         legacy[identity] = auth_id(name)
+                        # Only complete, simple authenticated rules have a proven
+                        # upstream String() representation. Never parse substrings
+                        # or infer a user from a shared destination/selector chain.
+                        safe = lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_.:/-]{1,128}',v)
+                        if safe(tag) and safe(name):
+                            for rule in config.get('route',{}).get('rules',[]):
+                                if (set(rule) == {'inbound','auth_user','action','outbound'}
+                                    and rule['inbound'] == [tag] and rule['auth_user'] == [name]
+                                    and rule['action'] == 'route' and safe(rule['outbound'])):
+                                    rendered = 'inbound='+tag+' auth_user='+name+' => route('+rule['outbound']+')'
+                                    bindings[auth_id(rendered)] = {'id':identity,'outbound':rule['outbound']}
+
                         if name in stats_names and all_names.count(name)==1 and '>>>' not in name:
                             native[identity] = auth_id(name)
             identities.sort()
@@ -74,5 +91,5 @@ def inbound_inventory(config):
             identities = sorted({auth_id(n) for n in names if isinstance(n, str) and n and names.count(n) == 1})
         out.append({'tag': tag, 'type': inbound['type'], 'routes': sorted(candidates), 'unknown': unknown,
                     'auth_ids': identities, 'auth_scheme':scheme, 'legacy_auth_ids':legacy,
-                    'native_users': native, 'auth_count': len(users), 'auth_unsupported': len(users)-len(identities)})
+                    'native_users': native, 'auth_names': labels, 'rule_bindings': bindings, 'auth_count': len(users), 'auth_unsupported': len(users)-len(identities)})
     return out

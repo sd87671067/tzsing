@@ -13,7 +13,7 @@ import (
 	"tzsingbox/internal/model"
 )
 
-// Only opt in using the artifact from TestNativeTwelveUUIDRealityRoutingAndClosedTraffic.
+// Only opt in using the artifact from TestNativeFourteenUUIDRealityRoutingAndClosedTraffic.
 // This replays genuine captured payload counters through the authenticated ingestion
 // boundary, persistent SQLite, API and WebSocket without inventing traffic.
 func TestNativeCapturedTrafficSQLiteAPIAndWebSocket(t *testing.T) {
@@ -26,7 +26,7 @@ func TestNativeCapturedTrafficSQLiteAPIAndWebSocket(t *testing.T) {
 		t.Fatal(e)
 	}
 	var tags []model.Tag
-	if json.Unmarshal(b, &tags) != nil || len(tags) != 12 {
+	if json.Unmarshal(b, &tags) != nil || len(tags) != 14 {
 		t.Fatal("invalid capture")
 	}
 	f := setup(t)
@@ -62,12 +62,12 @@ func TestNativeCapturedTrafficSQLiteAPIAndWebSocket(t *testing.T) {
 	check := func(views []model.View) bool {
 		t.Helper()
 		for _, v := range views {
-			if v.ID == "one" && v.Report != nil && len(v.Report.Tags) == 12 {
+			if v.ID == "one" && v.Report != nil && len(v.Report.Tags) == 14 {
 				found := map[string]model.Tag{}
 				for _, tag := range v.Report.Tags {
 					found[tag.ID] = tag
 				}
-				if len(found) != 12 {
+				if len(found) != 14 {
 					t.Fatal("merged IDs")
 				}
 				for _, captured := range tags {
@@ -108,5 +108,5 @@ func TestNativeCapturedTrafficSQLiteAPIAndWebSocket(t *testing.T) {
 	if json.NewDecoder(res.Body).Decode(&api) != nil || !check(api) {
 		t.Fatal("API pipeline")
 	}
-	t.Log("12 real captured UUID counters survived idempotent ingestion, SQLite, API and WebSocket")
+	t.Log("14 real captured UUID counters survived idempotent ingestion, SQLite, API and WebSocket")
 }

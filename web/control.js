@@ -37,14 +37,31 @@ const NodeControl=(()=>{
    try{await api('control/'+(restoreOnly?'restore':'apply'),'POST',{node_id:id,nonce:confirmation});if(live){input.value='';text(status,restoreOnly?'已恢复原始配置并验证服务。':'配置已应用并通过实际路径检测。');UI.notify(restoreOnly?'原始出站已恢复':'节点出站已更换')}}catch(e){if(live){text(status,e.message);UI.notify(e.message,'error')}}finally{busy=false;if(live){parse.disabled=false;input.disabled=false}}
   };
  }
+ async function rename(id,trigger){
+  const r=rows.get(id);if(!r)return;
+  const form=node('form'),label=node('label','','tzsing 显示别名'),input=node('input'),save=node('button','primary','保存名称');
+  input.value=r.t.global_name||'';input.placeholder=r.t.name;input.maxLength=128;label.append(input);form.append(node('p','notice','只修改显示名称，UUID、sing-box 原始 name、权限和流量历史保持不变。留空恢复配置中的 name。'),label,save);
+  let saved=false;const original=input.value,m=UI.modal('重命名',form,{trigger,dirty:()=>!saved&&input.value!==original});editor=m;
+  form.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;try{await api('admin/nodes','PATCH',{node_id:id,name:input.value});saved=true;m.force();update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin();message('显示名称已保存')}catch(e){message(e.message)}finally{save.disabled=false}};
+ }
+ function unavailable(id,action,trigger){
+  const titles={quota:'编辑月流量额度',expiry:'编辑到期时间',state:'启用 / 停用',delete:'删除节点'},body=node('div','control-body');
+  body.append(node('p','notice',action==='quota'?'当前连接快照会遗漏短连接，不能作为完整月额度账单。生产未接入完整用户计数和封禁执行器；额度限制不可用。':'生产 sing-box 由外部服务维护，当前配置应用会重启共享监听器并中断其他 UUID。独立操作执行器尚未接入；本次操作未执行。'));
+  const close=node('button','','知道了');body.append(close);const m=UI.modal(titles[action],body,{trigger});editor=m;close.onclick=()=>m.force();
+ }
  async function show(id,trigger){
   if(me?.role!=='admin')return;menu?.force();const r=rows.get(id);if(!r)return;key=id;
   const body=node('div','action-list'),items=[];
+  for(const [title,action] of [['重命名显示名称','rename'],['编辑月流量额度','quota'],['编辑到期时间','expiry'],['启用 / 停用','state'],['查看流量详情','details']]){
+   const b=node('button','action-item','');b.type='button';b.append(UI.icon(action==='rename'?'change':action==='details'?'check':'restore'),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else unavailable(id,action,trigger)};
+  }
+
   for(const [title,icon,action]of [['导入 Shadowrocket','import','import_shadowrocket'],['导入 v2rayN','import','import_v2rayn'],['复制节点链接','copy','copy'],['查看节点链接','copy','view'],['更换节点出站 IP','change','change'],['恢复原始出站','restore','restore']]){
    const b=node('button','action-item'+(action==='restore'?' danger':''));b.type='button';b.disabled=true;b.append(UI.icon(icon),node('span','',title));body.append(b);items.push([b,action]);b.onclick=()=>{if(b.disabled)return;m.force();if(action==='change'||action==='restore')edit(id,trigger,action==='restore');else share(id,action,trigger)}
   }
   const previewOnly=node('button','action-item');previewOnly.type='button';previewOnly.hidden=true;previewOnly.append(UI.icon('change'),node('span','','解析出站链接（只读）'));previewOnly.onclick=()=>{m.force();edit(id,trigger,false,true)};body.append(previewOnly);
-  const status=node('p','notice','正在检查独立权限与入站资料…');body.append(status);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
+  const status=node('p','notice','正在检查独立权限与入站资料…');body.append(status);
+  const del=node('button','action-item danger');del.type='button';del.append(UI.icon('close'),node('span','','删除节点'));del.onclick=()=>{m.force();unavailable(id,'delete',trigger)};body.append(del);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
   try{const g=await gate(id);if(menu!==m||!m.d.open)return;for(const[b,action]of items){b.disabled=action==='change'?!g.apply||g.actions?.change===false:action==='restore'?!g.restore:!g.share||!g.actions?.[action];b.title=b.disabled?'此入站、权限或控制条件不满足':''}previewOnly.hidden=!!g.apply||!g.preview||g.actions?.change===false;text(status,g.reason)}catch(e){if(menu===m)text(status,e.message)}
  }
  return {show,reconcile,invalidate};

@@ -8,6 +8,43 @@ import (
 )
 
 func (a *App) nodeSettings(w http.ResponseWriter, r *http.Request, u store.User, admin bool) {
+	if admin && r.Method == "PATCH" {
+		var v struct {
+			ID   string `json:"node_id"`
+			Name string `json:"name"`
+		}
+		if !read(w, r, &v) {
+			return
+		}
+		v.Name = strings.TrimSpace(v.Name)
+		if v.Name != "" && !validTag(v.Name) {
+			fail(w, 400)
+			return
+		}
+		if _, _, e := a.DB.Resolve(u, v.ID); e != nil {
+			fail(w, 403)
+			return
+		}
+		tx, e := a.DB.Begin()
+		if e != nil {
+			fail(w, 500)
+			return
+		}
+		defer tx.Rollback()
+		_, e = tx.Exec("UPDATE nodes SET name=? WHERE id=?", v.Name, v.ID)
+		if e == nil {
+			_, e = tx.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "node_display_name:"+v.ID)
+		}
+		if e == nil {
+			e = tx.Commit()
+		}
+		if e != nil {
+			fail(w, 500)
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
+		return
+	}
 	if r.Method != "PUT" {
 		fail(w, 405)
 		return
@@ -42,8 +79,23 @@ func (a *App) nodeSettings(w http.ResponseWriter, r *http.Request, u store.User,
 		fail(w, 400)
 		return
 	}
-	if _, _, err := a.DB.Resolve(u, v.ID); err != nil {
+	_, raw, resolveErr := a.DB.Resolve(u, v.ID)
+	if resolveErr != nil {
 		fail(w, 403)
+		return
+	}
+	if admin && strings.HasPrefix(raw, "identity:") {
+		if v.Quota != 0 || v.ExpiresAt != 0 || v.BillingDay != 1 || v.Timezone != "UTC" || v.AlertThreshold != 80 {
+			reply(w, 503, map[string]string{"error": "UUID 真实额度和到期执行器未启用；设置未保存或应用。请使用 PATCH 仅修改显示别名。"})
+			return
+		}
+		// The legacy PUT endpoint must never clear an identity's old policy
+		// metadata as a side effect of renaming. PATCH is the new rename path.
+		if _, err := a.DB.Exec("UPDATE nodes SET name=? WHERE id=?", v.Name, v.ID); err != nil {
+			fail(w, 500)
+			return
+		}
+		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}
 	tx, err := a.DB.Begin()

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,10 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			}
 		}
 	}
+	rules := map[string]map[string]RuleBinding{}
+	for _, in := range c.inventory.Inbounds {
+		rules[in.Type+"/"+in.Tag] = in.RuleBindings
+	}
 	if snap != nil {
 		c.unattributed = 0
 		for _, x := range snap.Connections {
@@ -78,13 +83,34 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			if _, ok := next[x.ID]; ok {
 				continue
 			}
-			next[x.ID] = x
 			if !ok {
 				c.unattributed++
 				continue
 			}
 			if key := identities[x.Metadata.Type][model.AuthID(x.Metadata.InboundUser)]; x.Metadata.InboundUser != "" && key != "" {
 				tag = key
+			}
+			if binding, ok := rules[x.Metadata.Type][model.AuthID(x.Rule)]; ok && slices.Contains(x.Chains, binding.Outbound) {
+				// A full rule contains authenticated name plus listener. Its
+				// inventory binding is a UUID, independent of the chosen exit.
+				identity := model.IdentityName(strings.TrimPrefix(known[x.Metadata.Type], "inbound:"), binding.ID)
+				if tag != known[x.Metadata.Type] && tag != identity {
+					c.unattributed++
+					continue
+				}
+				tag = identity
+			}
+			x.Attributed = tag
+			if prev, ok := c.previous[x.ID]; ok && strings.HasPrefix(prev.Attributed, "identity:") && strings.HasPrefix(tag, "identity:") && prev.Attributed != tag {
+				// Never lend an existing connection's baseline to a replacement
+				// UUID after a config edit or recycled authentication name.
+				next[x.ID] = prev
+				c.unattributed++
+				continue
+			}
+			next[x.ID] = x
+			if tag == known[x.Metadata.Type] && len(rules[x.Metadata.Type]) > 0 {
+				c.unattributed++
 			}
 			active[tag]++
 			du, dd := int64(0), int64(0)
@@ -131,6 +157,7 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 		for _, id := range in.AuthIDs {
 			u := t
 			u.AuthID = id
+			u.AuthName = in.AuthNames[id]
 			u.AuthScheme = in.AuthScheme
 			u.LegacyAuthID = in.LegacyAuthIDs[id]
 			u.Egress = ""
@@ -138,6 +165,14 @@ func (c *Clash) inboundTags(api map[string]Proxy, snap *Snapshot, now time.Time)
 			u.RouteReason = "认证身份的独立出站路径未验证"
 			u.Name = model.IdentityName(in.Tag, id)
 			u.Accounting = "unavailable"
+			u.AccountingReason = "认证身份不可归属：没有精确的认证路由规则或原生用户计数绑定"
+			for _, binding := range in.RuleBindings {
+				if binding.ID == id {
+					u.Accounting = "rule_user_observed"
+					u.AccountingReason = "完整 auth_user 路由规则映射 UUID；连接快照可能漏掉采样间结束的连接，累计为已观测下界"
+					break
+				}
+			}
 			if in.UserField == "inboundUser" {
 				u.Accounting = "identity"
 			}

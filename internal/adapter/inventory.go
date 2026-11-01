@@ -26,13 +26,19 @@ type Inventory struct {
 	Outbounds      []Outbound `json:"outbounds"`
 	RoutesVerified bool       `json:"routes_verified"`
 }
+type RuleBinding struct {
+	ID       string `json:"id"`
+	Outbound string `json:"outbound"`
+}
 type Inbound struct {
-	NativeUsers     map[string]string `json:"native_users,omitempty"`
-	AuthScheme      string            `json:"auth_scheme,omitempty"`
-	LegacyAuthIDs   map[string]string `json:"legacy_auth_ids,omitempty"`
-	AuthIDs         []string          `json:"auth_ids,omitempty"`
-	AuthCount       int               `json:"auth_count,omitempty"`
-	AuthUnsupported int               `json:"auth_unsupported,omitempty"`
+	AuthNames       map[string]string      `json:"auth_names,omitempty"`
+	RuleBindings    map[string]RuleBinding `json:"rule_bindings,omitempty"`
+	NativeUsers     map[string]string      `json:"native_users,omitempty"`
+	AuthScheme      string                 `json:"auth_scheme,omitempty"`
+	LegacyAuthIDs   map[string]string      `json:"legacy_auth_ids,omitempty"`
+	AuthIDs         []string               `json:"auth_ids,omitempty"`
+	AuthCount       int                    `json:"auth_count,omitempty"`
+	AuthUnsupported int                    `json:"auth_unsupported,omitempty"`
 	// Enabled only for a separately attested API extension. Standard sing-box Clash
 	// has no authentication identity field. Never infer identity from source/IP/chains.
 	UserField string   `json:"user_field,omitempty"`
@@ -95,6 +101,19 @@ func ReadInventory(path string) (*Inventory, error) {
 				return nil, fmt.Errorf("invalid authentication identity")
 			}
 			ids[id] = true
+		}
+		for id, name := range i.AuthNames {
+			if !ids[id] || len([]rune(name)) > 128 {
+				return nil, fmt.Errorf("invalid auth display name")
+			}
+		}
+		if len(i.RuleBindings) > 512 {
+			return nil, fmt.Errorf("too many rule bindings")
+		}
+		for hash, binding := range i.RuleBindings {
+			if !model.ValidAuthID(hash) || !ids[binding.ID] || binding.Outbound == "" || len(binding.Outbound) > 128 || i.AuthScheme != "uuid-v1" {
+				return nil, fmt.Errorf("invalid authenticated rule binding")
+			}
 		}
 		for id, userHash := range i.NativeUsers {
 			if !ids[id] || i.AuthScheme != "uuid-v1" || nativeSeen[userHash] {
