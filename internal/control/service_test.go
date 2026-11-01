@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,23 @@ func TestDisabledControllerPreservesInterruptedTransaction(t *testing.T) {
 	}
 	if _, err = os.Stat(cfg.Socket); !os.IsNotExist(err) {
 		t.Fatal("controller must not accept operations")
+	}
+}
+
+func TestMissingRestoreSnapshotHasSpecificReason(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	raw := uuidFixture()
+	os.WriteFile(path, raw, 0600)
+	c := Controller{Config: ServiceConfig{Config: path, State: dir, WriteEnabled: true}, Hooks: &ApplyHooks{}}
+	w := httptest.NewRecorder()
+	c.ServeHTTP(w, httptest.NewRequest("POST", "/status", strings.NewReader(`{"tag":"shared"}`)))
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	var response map[string]any
+	json.Unmarshal(w.Body.Bytes(), &response)
+	if response["restore"] != false || response["restore_reason"] == "" {
+		t.Fatal("missing snapshot unexplained", response)
 	}
 }

@@ -6,18 +6,23 @@ import (
 	"testing"
 )
 
-func TestKnownUncoordinatedWriterCannotBeBypassedByConfirmation(t *testing.T) {
-	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, "123"), 0700)
-	os.WriteFile(filepath.Join(dir, "123", "comm"), []byte("sbbot\n"), 0600)
-	if knownWriterConflict(dir) == nil {
-		t.Fatal("independent writer allowed")
+func TestGenericExternalWriter(t *testing.T) {
+	d := t.TempDir()
+	c := filepath.Join(d, "config.json")
+	os.WriteFile(c, []byte("{}"), 0600)
+	p := filepath.Join(d, "123")
+	os.MkdirAll(filepath.Join(p, "fd"), 0700)
+	os.MkdirAll(filepath.Join(p, "fdinfo"), 0700)
+	os.Symlink(c, filepath.Join(p, "fd", "9"))
+	os.WriteFile(filepath.Join(p, "fdinfo", "9"), []byte("flags:\t0100002\n"), 0600)
+	if configWriterConflict(d, c) == nil {
+		t.Fatal("external writable config allowed")
 	}
-	os.WriteFile(filepath.Join(dir, "123", "comm"), []byte("sing-box\n"), 0600)
-	if e := knownWriterConflict(dir); e != nil {
+	os.WriteFile(filepath.Join(p, "fdinfo", "9"), []byte("flags:\t0100000\n"), 0600)
+	if e := configWriterConflict(d, c); e != nil {
 		t.Fatal(e)
 	}
-	if knownWriterConflict(filepath.Join(dir, "missing")) == nil {
-		t.Fatal("unknown writer inventory allowed")
+	if configWriterConflict(filepath.Join(d, "missing"), c) == nil {
+		t.Fatal("missing inventory allowed")
 	}
 }

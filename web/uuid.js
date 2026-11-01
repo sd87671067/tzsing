@@ -11,8 +11,8 @@ const UUIDEditor=(()=>{
    function group(title){const fieldset=UI.make('fieldset','uuid-group');fieldset.append(UI.make('legend','',title));f.append(fieldset);return fieldset}
    function add(group,key,label,type='text',value='',disabled=false){const l=UI.make('label','',label),input=UI.make(type==='select'?'select':'input');input.name=key;if(type!=='select')input.type=type;input.value=value;input.disabled=disabled;l.append(input);group.append(l);return input}
    function capability(group,key,label){
-    const v=c.capabilities?.[key],row=UI.make('div','uuid-capability'),head=UI.make('div','title-row'),state=UI.make('span','pill',v?.state==='disabled'?'未启用':'暂不支持');
-    row.dataset.capability=key;head.append(UI.make('strong','',label+(v?.unit?' · '+v.unit:'')),state);row.append(head,UI.make('p','muted',v?.reason||'控制服务未提供执行能力证明，保持不可用。'),UI.make('small','muted','未保存 · 未生效'));group.append(row);
+    const v=c.capabilities?.[key],row=UI.make('div','uuid-capability'),head=UI.make('div','title-row'),state=UI.make('span','pill',v?.state==='ready'?'可应用':v?.state==='disabled'?'未启用':'暂不支持');
+    row.dataset.capability=key;head.append(UI.make('strong','',label+(v?.unit?' · '+v.unit:'')),state);row.append(head,UI.make('p','muted',v?.reason||'控制服务未提供执行能力证明，保持不可用。'),UI.make('small','muted',v?.state==='ready'?'通过预览与二次确认后生效':'未保存 · 未生效'));group.append(row);
    }
    const basic=group('基础信息'),name=add(basic,'name','节点中文名称');name.maxLength=128;name.required=true;
    const server=add(basic,'server','所属服务器','select');server.add(new Option(c.server_id,c.server_id));
@@ -29,17 +29,22 @@ const UUIDEditor=(()=>{
    }
    buttons[0].b.click();capability(routing,'outbound','独立出站应用');
    const traffic=group('流量与带宽');for(const [key,label]of [['quota','独立月额度'],['upload_limit','上传限速'],['download_limit','下载限速']])capability(traffic,key,label);
-   const limits=group('有效期与连接限制');for(const [key,label]of [['expires_at','到期自动停用'],['max_connections','最大并发连接'],['enabled','启用 / 停用']])capability(limits,key,label);
-   const actions=UI.make('div','row-actions uuid-actions'),preview=UI.make('button','primary','校验候选'),save=UI.make('button','','保存'),cancel=UI.make('button','','取消'),reset=UI.make('button','','重置');save.disabled=true;save.type=cancel.type=reset.type='button';save.title=c.reason;
-   cancel.onclick=()=>{clear();navigate('overview')};reset.onclick=()=>{f.reset();buttons[0].b.click();describe()};actions.append(preview,save,cancel,reset);f.append(actions);host.append(UI.make('p','notice',c.reason),f);preview.disabled=!c.inbounds.length;
+   const stateGroup=group('启用状态'),enabled=add(stateGroup,'enabled','添加后启用','checkbox');enabled.checked=true;
+   const limits=group('有效期与连接限制');for(const [key,label]of [['expires_at','到期自动停用'],['max_connections','最大并发连接']])capability(limits,key,label);
+   const actions=UI.make('div','row-actions uuid-actions'),preview=UI.make('button','primary','预览并添加节点'),cancel=UI.make('button','','取消'),reset=UI.make('button','','重置');cancel.type=reset.type='button';
+   cancel.onclick=()=>{clear();navigate('overview')};reset.onclick=()=>{f.reset();buttons[0].b.click();describe()};actions.append(preview,cancel,reset);f.append(actions);host.append(UI.make('p','notice',c.reason),f);preview.disabled=!c.inbounds.length;
    f.onsubmit=async e=>{
     e.preventDefault();if(preview.disabled||!f.reportValidity())return;preview.disabled=true;
     const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim();
     try{
-     const summary=await api('admin/node-preview','POST',{server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:true}});
-     if(rev!==revision||me?.role!=='admin')return;uuid.value='';const content=UI.make('div','control-body');
-     for(const line of ['名称：'+nodeName,'入站：'+inbound.value,'路由：'+routeLabel,'候选：不限额 / 不限速 / 永不过期 / 不限并发；启用',summary.reason,'共享监听器、密钥和已有 UUID 保持不变。候选校验后丢弃，没有保存生产节点。'])content.append(UI.make('p','',line));
-     UI.modal('候选配置校验通过',content,{trigger:preview});UI.notify('候选校验通过；未应用生产','success');
+     const summary=await api('admin/node-preview','POST',{server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked}});
+     if(rev!==revision||me?.role!=='admin')return;
+     if(!summary.writable)throw Error(summary.reason||c.reason||'生产写入未启用');
+     const description='名称：'+nodeName+'\n入站：'+inbound.value+' · '+routeLabel+'\n共享 443、REALITY 密钥和握手配置保持现有值。\n将重启整个 sing-box，所有共享连接可能中断；失败自动回滚。\n'+summary.reason;
+     if(!await UI.confirm('确认添加 UUID 节点',description,'确认应用'))return;
+     const result=await api('admin/node-create','POST',{server:server.value,nonce:summary.nonce});
+     if(rev!==revision)return;uuid.value='';UI.notify(result.warning||'UUID 节点已添加并通过健康验证');navigate('overview');
+
     }catch(e){if(rev===revision)UI.notify(e.message,'error')}finally{preview.disabled=false}
    };
   }catch(e){if(rev===revision)host.replaceChildren(UI.make('p','notice',e.message))}

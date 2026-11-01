@@ -208,7 +208,7 @@ func (c *Controller) audit(event, tag string) error {
 
 func (c *Controller) apply(p plan) error {
 	if c.Hooks == nil {
-		if e := knownWriterConflict("/proc"); e != nil {
+		if e := configWriterConflict("/proc", c.Config.Config); e != nil {
 			return e
 		}
 	}
@@ -219,7 +219,7 @@ func (c *Controller) apply(p plan) error {
 	if e != nil || digest(raw) != p.Hash {
 		return ErrScope
 	}
-	if !p.Restore && p.Action == "" && c.Hooks == nil {
+	if !p.Restore && p.Action == "" && c.Hooks == nil && text(p.Snapshot.Outbound["type"]) != "direct" {
 		pinned, err := pinPublic(p.Snapshot.Outbound)
 		if err != nil {
 			return err
@@ -337,7 +337,7 @@ func (c *Controller) apply(p plan) error {
 		}
 	}
 	expectedExit := c.lastIP
-	if p.Action == "" {
+	if p.Action == "" || (p.Action == "create" && !identityDisabled(candidate, p.Tag, p.AuthID)) {
 		checked := candidateMap(p.Candidate)
 		if p.AuthID != "" {
 			scoped, err := IdentityInbound(findInbound(checked, p.Tag), p.AuthID)
@@ -354,13 +354,25 @@ func (c *Controller) apply(p plan) error {
 		if e = c.probeNode(checked, p.Tag); e != nil {
 			return rollback(e)
 		}
-		if !p.Restore && expectedExit != "" && c.lastIP != expectedExit {
+		if p.Action == "" && !p.Restore && expectedExit != "" && c.lastIP != expectedExit {
 			return rollback(errors.New("UUID 实际出口与目标出站不一致"))
 		}
+	}
+	currentAfter, readErr := os.ReadFile(c.Config.Config)
+	if readErr != nil || digest(currentAfter) != digest(p.Candidate) {
+		return rollback(errors.New("应用期间发生外部写入"))
 	}
 	if c.Config.ExitFile != "" && c.lastIP != "" {
 		receipt := map[string]any{"config_hash": digest(p.Candidate), "tag": p.Tag, "outbound": text(p.Snapshot.Outbound["tag"]), "ip": c.lastIP, "at": time.Now().Unix()}
 		atomicFile(c.Config.ExitFile, canonical(receipt), 0644)
+	}
+	// Rebase only snapshots whose baseline exactly matches the validated input.
+	// Trusted internal identity changes can evolve policy; external edits cannot.
+	for key, snapshot := range journals {
+		if snapshot.BaselineHash == baselineHash(original) {
+			snapshot.BaselineHash = baselineHash(candidate)
+			journals[key] = snapshot
+		}
 	}
 	if p.Restore {
 		delete(journals, planKey(p))
@@ -368,7 +380,8 @@ func (c *Controller) apply(p plan) error {
 		if p.Action == "" {
 			journals[planKey(p)] = p.Snapshot
 		}
-		if p.Action == "disable" {
+		if p.Action == "disable" || (p.Action == "create" && identityDisabled(candidate, p.Tag, p.AuthID)) {
+			p.Snapshot = Snapshot{BaselineHash: baselineHash(candidate)}
 			journals[planKey(p)+":disabled"] = p.Snapshot
 		}
 		if p.Action == "enable" || p.Action == "delete" {
@@ -437,13 +450,25 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeEnabled := c.Config.WriteEnabled
 	writerReason := c.Config.DisabledReason
 	if writeEnabled && c.Hooks == nil {
-		if e := knownWriterConflict("/proc"); e != nil {
+		if e := configWriterConflict("/proc", c.Config.Config); e != nil {
 			writeEnabled = false
 			writerReason = e.Error()
 		}
 	}
 	if r.URL.Path == "/uuid-catalog" {
-		json.NewEncoder(w).Encode(UUIDCatalog(raw))
+		catalog := UUIDCatalog(raw)
+		catalog["apply"] = writeEnabled
+		if writeEnabled {
+			caps := catalog["capabilities"].(map[string]any)
+			for _, key := range []string{"enabled", "outbound"} {
+				caps[key] = map[string]any{"state": "ready", "saved": false, "effective": false, "reason": "预览及二次确认后，校验、原子写入、重启和健康检查。"}
+			}
+		}
+		catalog["reason"] = writerReason
+		if writeEnabled {
+			catalog["reason"] = "需二次确认；重启整个 sing-box，共享 443 连接可能中断。"
+		}
+		json.NewEncoder(w).Encode(catalog)
 		return
 	}
 	if r.URL.Path == "/uuid-preview" {
@@ -460,8 +485,47 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(422, err.Error())
 			return
 		}
+		if c.plans == nil {
+			c.plans = map[string]plan{}
+		}
+		for k, old := range c.plans {
+			if time.Now().After(old.Expires) {
+				delete(c.plans, k)
+			}
+		}
+		if len(c.plans) >= 128 {
+			fail(429, "预览过多")
+			return
+		}
+		id := auth.Random()
+		authID := text(summary["auth_id"])
+		delete(summary, "auth_id")
+		c.plans[auth.Digest(id)] = plan{Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
+		summary["plan"] = id
+		summary["writable"] = writeEnabled
+		summary["effects"] = impact(config, v.Node.Inbound, "")
+		summary["impact"] = "重启整个 sing-box；共享 443 连接可能中断，失败自动回滚。"
 		c.audit("uuid_candidate_checked", v.Node.Inbound)
 		json.NewEncoder(w).Encode(summary)
+		return
+	}
+	if r.URL.Path == "/uuid-apply" {
+		key := auth.Digest(v.Plan)
+		p, ok := c.plans[key]
+		delete(c.plans, key)
+		if !writeEnabled {
+			fail(503, "生产写入未启用")
+			return
+		}
+		if !ok || p.Action != "create" || time.Now().After(p.Expires) {
+			fail(409, "确认过期或已使用")
+			return
+		}
+		if err := c.apply(p); err != nil {
+			fail(409, err.Error())
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "auth_id": p.AuthID, "inbound": p.Tag})
 		return
 	}
 	in := findInbound(config, v.Tag)
@@ -469,8 +533,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(403, "目标不可用")
 		return
 	}
-	// Identity operations may export only that user's profile. Route operations
-	// remain closed until identity-specific routing and probing are implemented.
+	// Resolve only the requested identity before sharing or previewing a route.
 	if v.AuthID != "" {
 		if r.URL.Path != "/status" && r.URL.Path != "/share" && r.URL.Path != "/preview" && r.URL.Path != "/restore-preview" && r.URL.Path != "/apply" {
 			fail(403, "认证身份的独立路由应用尚不可用；禁止修改整个入站")
@@ -505,7 +568,13 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				reason = "应用需重启整个 sing-box 实例"
 			}
 		}
-		respond(map[string]any{"apply": writeEnabled && supportsNode(in) && (v.AuthID != "" || len(array(in["users"])) <= 1), "restore": writeEnabled && (v.AuthID != "" || len(array(in["users"])) <= 1) && journals[journalKey].Outbound != nil, "share": len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "preview": true, "reason": reason, "impact": impact})
+		restoreReason := ""
+		if journals[journalKey].Outbound == nil {
+			restoreReason = "该 UUID 尚无 tzsing 切换快照；完成更换后才能恢复，不能猜测原路由"
+		} else if !writeEnabled {
+			restoreReason = reason
+		}
+		respond(map[string]any{"restore_reason": restoreReason, "apply": writeEnabled && supportsNode(in) && (v.AuthID != "" || len(array(in["users"])) <= 1), "restore": writeEnabled && (v.AuthID != "" || len(array(in["users"])) <= 1) && journals[journalKey].Outbound != nil, "share": len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "outbounds": UUIDCatalog(raw)["outbounds"], "preview": true, "reason": reason, "impact": impact})
 	case "/share":
 		link, e := Share(in, c.Config.Endpoints[v.Tag], v.Profile, v.Label)
 		if e != nil {
@@ -565,15 +634,33 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			preview = map[string]any{"operation": v.Action}
 		} else {
-			l, err := Parse(v.Link)
-			if err != nil {
-				fail(400, ErrLink.Error())
-				return
-			}
-			o, err := l.Outbound(managedTag(journalKey))
-			if err != nil {
-				fail(422, "该链接参数尚不支持安全应用")
-				return
+			var o map[string]any
+			if v.Outbound != "" {
+				for _, item := range array(config["outbounds"]) {
+					current := object(item)
+					kind, _ := model.OutboundType(text(current["type"]))
+					if text(current["tag"]) == v.Outbound && kind == "actual" {
+						o = candidateMap(canonical(current))
+						o["tag"] = managedTag(journalKey)
+					}
+				}
+				if o == nil {
+					fail(422, "请选择已有 Direct 或实际中转出站")
+					return
+				}
+				preview = map[string]any{"protocol": o["type"], "server": "已有出站：" + v.Outbound, "port": o["server_port"]}
+			} else {
+				l, err := Parse(v.Link)
+				if err != nil {
+					fail(400, ErrLink.Error())
+					return
+				}
+				o, err = l.Outbound(managedTag(journalKey))
+				if err != nil {
+					fail(422, "该链接参数尚不支持安全应用")
+					return
+				}
+				preview = l.Preview()
 			}
 			var prior *Snapshot
 			if s, ok := journals[journalKey]; ok {
@@ -584,7 +671,6 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				p.Candidate, p.Snapshot, e = Change(raw, v.Tag, o, prior)
 			}
-			preview = l.Preview()
 		}
 		if e != nil {
 			fail(409, ErrScope.Error())
@@ -649,7 +735,7 @@ func RunController(ctx context.Context, path string) error {
 		if !cfg.WriteEnabled {
 			return errors.New("生产配置写入未启用；保留中断事务，禁止自动恢复")
 		}
-		if e := knownWriterConflict("/proc"); e != nil {
+		if e := configWriterConflict("/proc", cfg.Config); e != nil {
 			return e
 		}
 		var tx transaction

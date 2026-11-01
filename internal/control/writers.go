@@ -8,27 +8,50 @@ import (
 	"strings"
 )
 
-// Extra fail-closed guard for the known local independent writer. This is NOT
-// writer coordination: an operator must still establish a sole writer or a
-// shared transaction entry before enabling writes. A process can start later.
-func knownWriterConflict(proc string) error {
-	entries, e := os.ReadDir(proc)
-	if e != nil {
-		return errors.New("无法核实配置写入者；未应用")
+// Complement the transaction flock and version checks with generic detection of
+// open writable configuration descriptors. Sole-writer ownership must also be
+// established operationally: closed or sandbox-inaccessible descriptors cannot
+// reveal a future writer. Configuration CAS checks remain mandatory.
+func configWriterConflict(proc, config string) error {
+	target, err := os.Stat(config)
+	if err != nil {
+		return errors.New("无法核实配置版本；未应用")
+	}
+	entries, err := os.ReadDir(proc)
+	if err != nil {
+		return errors.New("无法核实外部写入；未应用")
 	}
 	for _, entry := range entries {
-		if _, e := strconv.Atoi(entry.Name()); e != nil {
+		pid, e := strconv.Atoi(entry.Name())
+		if e != nil || pid == os.Getpid() {
 			continue
 		}
-		b, e := os.ReadFile(filepath.Join(proc, entry.Name(), "comm"))
-		if os.IsNotExist(e) {
+		base := filepath.Join(proc, entry.Name())
+		fds, e := os.ReadDir(filepath.Join(base, "fd"))
+		if os.IsNotExist(e) || os.IsPermission(e) {
 			continue
 		}
 		if e != nil {
-			return errors.New("无法核实配置写入者；未应用")
+			return errors.New("无法检查外部配置描述符；未应用")
 		}
-		if strings.TrimSpace(string(b)) == "sbbot" {
-			return errors.New("sbbot 未接入共享写锁，配置应用暂不可用")
+		for _, fd := range fds {
+			st, e := os.Stat(filepath.Join(base, "fd", fd.Name()))
+			if e != nil || !os.SameFile(target, st) {
+				continue
+			}
+			info, e := os.ReadFile(filepath.Join(base, "fdinfo", fd.Name()))
+			if e != nil {
+				return errors.New("无法检查外部写权限；未应用")
+			}
+			for _, line := range strings.Split(string(info), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) == 2 && fields[0] == "flags:" {
+					flags, e := strconv.ParseUint(fields[1], 8, 64)
+					if e != nil || flags&3 != 0 {
+						return errors.New("发现外部配置写入描述符；未应用")
+					}
+				}
+			}
 		}
 	}
 	return nil

@@ -44,6 +44,9 @@ func (c *Controller) probe(o map[string]any) error {
 	if c.Hooks != nil && c.Hooks.Probe != nil {
 		return c.Hooks.Probe(o)
 	}
+	if text(o["type"]) == "direct" {
+		return c.probeClient(o)
+	}
 	pinned, e := pinPublic(o)
 	if e != nil {
 		return e

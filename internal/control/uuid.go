@@ -7,8 +7,8 @@ import (
 	"tzsingbox/internal/model"
 )
 
-// UUIDCandidate never edits a file or starts a process. Production activation
-// deliberately has no API until interruption and external-writer gates are met.
+// UUIDCandidate never edits a file or starts a process. The controller validates
+// its candidate and binds it to a short-lived, single-use application plan.
 type UUIDNodeRequest struct {
 	Inbound        string `json:"inbound"`
 	Name           string `json:"name"`
@@ -84,7 +84,7 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 		return nil, nil, ErrScope
 	}
 	// Unsupported enforcement must never silently become stored/display-only limits.
-	if req.Quota != 0 || req.UploadLimit != 0 || req.DownloadLimit != 0 || req.ExpiresAt != 0 || req.MaxConnections != 0 || !req.Enabled {
+	if req.Quota != 0 || req.UploadLimit != 0 || req.DownloadLimit != 0 || req.ExpiresAt != 0 || req.MaxConnections != 0 {
 		return nil, nil, fmt.Errorf("实际限制执行器未启用；只接受无限制、启用状态的候选")
 	}
 	if req.UUID == "" {
@@ -115,37 +115,65 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 		}
 	}
 	in["users"] = append(array(in["users"]), map[string]any{"name": authName, "uuid": req.UUID, "flow": "xtls-rprx-vision"})
-	if req.Outbound != "" {
+	route := object(config["route"])
+	// Preserve the original route for ordinary listeners. A unified listener
+	// ends with an explicit catch-all reject; grant only the new identity there.
+	rules := array(route["rules"])
+	pos := len(rules)
+	for i, v := range rules {
+		r := object(v)
+		if text(r["action"]) == "reject" && len(r) == 2 && string(canonical(r["inbound"])) == string(canonical([]string{req.Inbound})) {
+			pos = i
+			break
+		}
+	}
+	selected := req.Outbound
+	if selected == "" && pos < len(rules) {
+		selected = text(route["final"])
+	}
+	if selected != "" {
 		found := false
 		for _, v := range array(config["outbounds"]) {
 			o := object(v)
 			kind, _ := model.OutboundType(text(o["type"]))
-			if text(o["tag"]) == req.Outbound && kind == "actual" {
+			if text(o["tag"]) == selected && kind == "actual" {
 				found = true
 			}
 		}
 		if !found {
 			return nil, nil, fmt.Errorf("必须选择已有实际出站")
 		}
-		// Append fallback after all original policies. If an earlier route could
-		// capture this identity, reject instead of overriding security/priority.
-		route := object(config["route"])
-		for _, v := range array(route["rules"]) {
-			rule := object(v)
-			if action := text(rule["action"]); action == "sniff" || action == "resolve" || action == "route-options" {
+		for _, v := range rules[:pos] {
+			r := object(v)
+			action := text(r["action"])
+			if action == "sniff" || action == "resolve" || action == "route-options" || action == "reject" {
 				continue
 			}
-			if text(rule["action"]) == "reject" {
-				continue
-			}
-			if !definitelyExcludes(rule, req.Inbound, authName) {
+			if !definitelyExcludes(r, req.Inbound, authName) {
 				return nil, nil, fmt.Errorf("原有路由可能优先匹配；拒绝改变原安全策略")
 			}
 		}
-		route["rules"] = append(array(route["rules"]), map[string]any{"inbound": []string{req.Inbound}, "auth_user": []string{authName}, "action": "route", "outbound": req.Outbound})
+		binding := map[string]any{"inbound": []string{req.Inbound}, "auth_user": []string{authName}, "action": "route", "outbound": selected}
+		next := append([]any{}, rules[:pos]...)
+		next = append(next, binding)
+		next = append(next, rules[pos:]...)
+		route["rules"] = next
 		config["route"] = route
 	}
-	return canonical(config), map[string]any{"valid": true, "apply": false, "name": strings.TrimSpace(req.Name), "shared_listener": true, "new_listeners": 0, "sni_shared": true, "authentication": "新增独立 UUID；凭据仅存在候选校验内存中", "routing": "原规则优先；新增身份精确匹配", "reason": "候选校验通过不代表生产已保存；未写入配置、数据库或授权"}, nil
+	if !req.Enabled {
+		var e error
+		updated, e := IdentityMutation(canonical(config), req.Inbound, model.UUIDAuthID(req.UUID), "disable")
+		if e != nil {
+			return nil, nil, e
+		}
+		config = candidateMap(updated)
+	}
+	// Extend native metering only if the deployment already has that executor.
+	stats := object(object(object(config["experimental"])["v2ray_api"])["stats"])
+	if stats["enabled"] == true {
+		stats["users"] = append(array(stats["users"]), authName)
+	}
+	return canonical(config), map[string]any{"valid": true, "apply": false, "auth_id": model.UUIDAuthID(req.UUID), "name": strings.TrimSpace(req.Name), "shared_listener": true, "new_listeners": 0, "sni_shared": true, "authentication": "新增独立 UUID；凭据仅存在候选校验内存中", "routing": "原规则优先；新增身份精确匹配", "reason": "预览未写入；二次确认后校验、原子写入、重启及真实 UUID 路径验证"}, nil
 }
 
 func definitelyExcludes(rule map[string]any, inbound, user string) bool {

@@ -58,7 +58,7 @@ func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 	rules := []any{}
 	for _, v := range array(route["rules"]) {
 		r := object(v)
-		if text(r["outbound"]) != "" && (text(r["action"]) == "" || text(r["action"]) == "route") {
+		if text(r["outbound"]) != "" && (text(r["action"]) == "" || text(r["action"]) == "route") && !definitelyExcludes(r, tag, text(u["name"])) {
 			predicate := map[string]any{}
 			for k, val := range r {
 				if k != "outbound" && k != "action" {
@@ -66,7 +66,7 @@ func ChangeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 				}
 			}
 			nr := map[string]any{"type": "logical", "mode": "and", "rules": []any{guard, predicate}, "action": "route", "outbound": name}
-			if len(predicate) == 0 {
+			if len(predicate) == 0 || (len(predicate) == 2 && string(canonical(predicate["inbound"])) == string(canonical([]string{tag})) && string(canonical(predicate["auth_user"])) == string(canonical([]string{text(u["name"])}))) {
 				nr = map[string]any{"inbound": []any{tag}, "auth_user": []any{text(u["name"])}, "action": "route", "outbound": name}
 			}
 			rules = append(rules, nr)
@@ -159,6 +159,25 @@ func IdentityMutation(raw []byte, tag, id, action string) ([]byte, error) {
 			return nil, errors.New("最后一个 UUID 不支持在此删除")
 		}
 		in["users"] = users
+		clean := []any{}
+		for _, v := range kept {
+			r := object(v)
+			if len(r) == 4 && text(r["action"]) == "route" && string(canonical(r["inbound"])) == string(canonical([]string{tag})) && string(canonical(r["auth_user"])) == string(canonical([]string{text(u["name"])})) {
+				continue
+			}
+			clean = append(clean, v)
+		}
+		kept = clean
+		stats := object(object(object(c["experimental"])["v2ray_api"])["stats"])
+		if stats["enabled"] == true {
+			names := []any{}
+			for _, v := range array(stats["users"]) {
+				if text(v) != text(u["name"]) {
+					names = append(names, v)
+				}
+			}
+			stats["users"] = names
+		}
 	default:
 		return nil, ErrScope
 	}
@@ -185,4 +204,18 @@ func impact(config map[string]any, tag, id string) map[string]any {
 		listeners = append(listeners, map[string]any{"tag": text(i["tag"]), "port": i["listen_port"], "users": n})
 	}
 	return map[string]any{"target": tag, "auth_id": id, "restart": true, "restart_scope": "整个 sing-box 实例", "shared_listener": in["listen_port"], "other_uuids": others, "instance_users": total, "listeners": listeners, "connections": "现有连接可能中断；无法可靠估计恢复时长"}
+}
+
+func identityDisabled(c map[string]any, tag, id string) bool {
+	u, e := identityUser(c, tag, id)
+	if e != nil {
+		return false
+	}
+	for _, v := range array(object(c["route"])["rules"]) {
+		r := object(v)
+		if text(r["action"]) == "reject" && string(canonical(r["inbound"])) == string(canonical([]string{tag})) && string(canonical(r["auth_user"])) == string(canonical([]string{text(u["name"])})) {
+			return true
+		}
+	}
+	return false
 }

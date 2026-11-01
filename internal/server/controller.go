@@ -75,11 +75,12 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return
 	}
 	var v struct {
-		Node    string `json:"node_id"`
-		Link    string `json:"link"`
-		Nonce   string `json:"nonce"`
-		Action  string `json:"action"`
-		Profile string `json:"profile"`
+		Node     string `json:"node_id"`
+		Outbound string `json:"outbound"`
+		Link     string `json:"link"`
+		Nonce    string `json:"nonce"`
+		Action   string `json:"action"`
+		Profile  string `json:"profile"`
 	}
 	if path == "status" && r.Method == "GET" {
 		v.Node = r.URL.Query().Get("node_id")
@@ -152,6 +153,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			out["nonce"] = issue("", "")
 			out["apply"] = out["apply"] == true && actions["change"]
 			out["restore"] = out["restore"] == true && actions["restore"]
+			if !actions["restore"] {
+				out["restore_reason"] = "当前账号缺少独立恢复权限"
+			}
 			out["share"] = out["share"] == true && (actions["copy"] || actions["import_shadowrocket"] || actions["import_v2rayn"] || actions["view"])
 		}
 		reply(w, status, out)
@@ -189,6 +193,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			return
 		}
 		payload["link"] = v.Link
+		payload["outbound"] = v.Outbound
 		if v.Action != "" {
 			if fresh.Role != "admin" || (v.Action != "enable" && v.Action != "disable" && v.Action != "delete") {
 				fail(w, 403)

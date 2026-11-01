@@ -51,7 +51,7 @@ func TestUUIDCandidateOneListenerAndSecurityPolicies(t *testing.T) {
 	if _, _, e := UUIDCandidate(original, req); e == nil {
 		t.Fatal("bad UUID accepted")
 	}
-	for _, req := range []UUIDNodeRequest{{Inbound: "shared", Name: "x", Enabled: true, Quota: 1}, {Inbound: "shared", Name: "x", Enabled: true, UploadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, DownloadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, MaxConnections: 1}, {Inbound: "shared", Name: "x", Enabled: true, ExpiresAt: 1}, {Inbound: "shared", Name: "x"}} {
+	for _, req := range []UUIDNodeRequest{{Inbound: "shared", Name: "x", Enabled: true, Quota: 1}, {Inbound: "shared", Name: "x", Enabled: true, UploadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, DownloadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, MaxConnections: 1}, {Inbound: "shared", Name: "x", Enabled: true, ExpiresAt: 1}} {
 		if _, _, e := UUIDCandidate(original, req); e == nil {
 			t.Fatal("unsupported enforcement accepted")
 		}
