@@ -34,7 +34,7 @@ func TestAdminBrowserStage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/outbound-catalog":
-			io.WriteString(w, `{"items":[{"tag":"relay","protocol":"http","references":[]}]}`)
+			io.WriteString(w, `{"items":[{"tag":"relay","protocol":"http","references":[]}],"mappings":{"`+model.IdentityName("shared", model.UUIDAuthID("11111111-1111-4111-8111-111111111111"))+`":["relay"]}}`)
 		case "/status":
 			io.WriteString(w, `{"share":true,"apply":true,"restore":true,"preview":true,"profiles":[{"id":"single","label":"当前 UUID"}],"reason":"隔离 UI 夹具"}`)
 		case "/share":
@@ -69,9 +69,8 @@ func TestAdminBrowserStage(t *testing.T) {
 	}
 	f.db.Exec("DELETE FROM grants WHERE user_id=2")
 	f.db.Exec("INSERT INTO grants VALUES(2,'one',?)", tags[0].Name)
-	f.db.Exec("INSERT INTO uuid_permissions VALUES(2,'alice',1,1,1,1)")
-	o, _ := f.db.RegisterOutbound("one", "relay", "合成出站", 0)
-	f.db.Exec("INSERT INTO uuid_outbound_grants VALUES(2,'alice',?)", o.ID)
+	f.db.Exec("INSERT INTO user_operations VALUES(2,'change')")
+	_, _ = f.db.RegisterOutbound("one", "relay", "合成出站", 0)
 	data, _ := json.Marshal(map[string]any{"base": f.srv.URL + "/testprefix", "admin": "administrator-test-password", "viewer": "viewer-test-password"})
 	if e = os.WriteFile(filepath.Join(dir, "browser.json"), data, 0600); e != nil {
 		t.Fatal(e)

@@ -224,10 +224,6 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.personalOutbounds(w, r, u)
 		return
 	}
-	if path == "/api/admin/uuid-permissions" {
-		a.uuidPermissions(w, r, u)
-		return
-	}
 	if strings.HasPrefix(path, "/api/control/") {
 		a.controlAPI(w, r, u, strings.TrimPrefix(path, "/api/control/"))
 		return
@@ -472,29 +468,6 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 	case "node-catalog", "node-preview", "node-create", "node-delete", "node-state":
 		a.uuidAdmin(w, r, u, path)
 		return
-	}
-	if r.Method != "GET" && (path == "grants" || path == "operations" || path == "users" && (r.Method == "DELETE" || r.Method == "PATCH")) {
-		body, e := io.ReadAll(io.LimitReader(r.Body, 64<<10))
-		if e != nil {
-			fail(w, 400)
-			return
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		var target struct {
-			ID     int64 `json:"id"`
-			UserID int64 `json:"user_id"`
-		}
-		if json.Unmarshal(body, &target) != nil {
-			fail(w, 400)
-			return
-		}
-		if target.UserID != 0 {
-			target.ID = target.UserID
-		}
-		if err := a.restoreUserBindings(r.Context(), target.ID, ""); err != nil {
-			reply(w, 409, map[string]string{"error": err.Error()})
-			return
-		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

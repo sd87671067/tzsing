@@ -120,18 +120,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		actions[action] = a.controlPermission(fresh, action)
 		anyPermission = anyPermission || actions[action]
 	}
-	if fresh.Role != "admin" {
-		anyPermission = anyPermission || a.DB.UUIDPermission(fresh.ID, v.Node).Change
-	}
 	if !anyPermission {
 		fail(w, 403)
 		return
-	}
-	if fresh.Role != "admin" {
-		p := a.DB.UUIDPermission(fresh.ID, v.Node)
-		actions["change"] = p.Change
-		actions["restore"] = p.Change
-		anyPermission = anyPermission || p.Change
 	}
 	issue := func(plan, action string) string {
 		a.mu.Lock()
@@ -159,18 +150,13 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		out, status := a.hostControl(r.Context(), "status", payload)
 		if status == 200 {
 			if fresh.Role != "admin" && actions["change"] {
-				items, err := a.syncOutbounds(r.Context())
+				items, err := a.selectableOutbounds(r.Context(), fresh, v.Node)
 				if err != nil {
 					fail(w, 503)
 					return
 				}
-				filtered := []any{}
-				for _, o := range items {
-					if a.DB.CanBind(fresh, v.Node, o.ID) {
-						filtered = append(filtered, map[string]string{"tag": o.ID, "type": "授权出站", "name": o.Name})
-					}
-				}
-				out["outbounds"] = filtered
+				out["outbounds"] = items
+
 			}
 			if fresh.Role != "admin" && !actions["change"] {
 				out["outbounds"] = []any{}
@@ -218,7 +204,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		if path == "apply" {
 			id = n.OutboundID
 		}
-		if v.Link != "" || v.Action != "" || !a.DB.CanBind(fresh, v.Node, id) {
+		if v.Link != "" || v.Action != "" || !a.canSelectOutbound(r.Context(), fresh, v.Node, id) {
 			fail(w, 403)
 			return
 		}

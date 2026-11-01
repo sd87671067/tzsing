@@ -210,7 +210,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 			}
 			items = append(items, map[string]any{"tag": text(o["tag"]), "protocol": text(o["type"]), "server": text(o["server"]), "port": o["server_port"], "tls": object(o["tls"])["enabled"] == true, "credentials_present": text(o["password"]) != "" || text(o["uuid"]) != "", "references": outboundRefs(config, text(o["tag"]))})
 		}
-		send(map[string]any{"items": items, "writable": writeEnabled})
+		send(map[string]any{"items": items, "writable": writeEnabled, "mappings": outboundMappings(config)})
 		return
 	}
 	if r.URL.Path == "/outbound-test" {

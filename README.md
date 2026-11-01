@@ -98,4 +98,4 @@ docker compose ps
 
 现有 UUID 的独立出站、启停/删除事务和用户操作权限见 [操作与安全边界](docs/admin-operations.md)。唯一写入者接管与生产配置事务已打通；v2 到期/月额度 gate 已通过隔离载荷验证，生产激活仍需单独批准 sing-box 重启。详见上述执行状态文档。
 
-逐 UUID 出站白名单、个人出站和动态链路检测见 [出站授权说明](docs/OUTBOUND-PERMISSIONS.md)。生产执行器激活状态见 [执行状态](docs/UUID-EXECUTION-STATUS.md)。
+动态可选出站、个人出站和动态链路检测见 [出站授权说明](docs/OUTBOUND-PERMISSIONS.md)。生产执行器激活状态见 [执行状态](docs/UUID-EXECUTION-STATUS.md)。
