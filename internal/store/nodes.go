@@ -256,6 +256,8 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	if t.Accounting == "unavailable" {
 		t.MonthUsed = nil
 	}
+	t.ShowExpiry = u.Role == "admin" || s.Setting("show_expiry", 0) == 1
+	t.ShowQuota = u.Role == "admin" || s.Setting("show_quota", 1) == 1
 	return nil
 }
 

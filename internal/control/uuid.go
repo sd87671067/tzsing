@@ -5,21 +5,23 @@ import (
 	"fmt"
 	"strings"
 	"tzsingbox/internal/model"
+	"tzsingbox/policy"
 )
 
 // UUIDCandidate never edits a file or starts a process. The controller validates
 // its candidate and binds it to a short-lived, single-use application plan.
 type UUIDNodeRequest struct {
-	Inbound        string `json:"inbound"`
-	Name           string `json:"name"`
-	UUID           string `json:"uuid,omitempty"`
-	Outbound       string `json:"outbound,omitempty"`
-	Quota          int64  `json:"quota"`
-	UploadLimit    int64  `json:"upload_limit"`
-	DownloadLimit  int64  `json:"download_limit"`
-	ExpiresAt      int64  `json:"expires_at"`
-	MaxConnections int    `json:"max_connections"`
-	Enabled        bool   `json:"enabled"`
+	Inbound       string `json:"inbound"`
+	Name          string `json:"name"`
+	UUID          string `json:"uuid,omitempty"`
+	Outbound      string `json:"outbound,omitempty"`
+	Quota         int64  `json:"quota"`
+	UploadLimit   int64  `json:"upload_limit"`
+	DownloadLimit int64  `json:"download_limit"`
+	ExpiresAt     int64  `json:"expires_at"`
+	BillingDay    int    `json:"billing_day"`
+	Timezone      string `json:"timezone"`
+	Enabled       bool   `json:"enabled"`
 }
 
 func NewUUID() (string, error) {
@@ -45,7 +47,6 @@ func UUIDCapabilities() map[string]any {
 		{"upload_limit", "MiB/s", "unsupported", "sing-box 1.13.15 VLESS 没有逐用户上传限速；认证后的数据路径执行器尚未接入。0 表示不限速。"},
 		{"download_limit", "MiB/s", "unsupported", "sing-box 1.13.15 VLESS 没有逐用户下载限速；认证后的数据路径执行器尚未接入。0 表示不限速。"},
 		{"expires_at", "本地时间", "disabled", "到期认证停用执行器未接入；生产配置重载可能断流，存在外部写入冲突。已移除提醒设置。"},
-		{"max_connections", "连接数", "unsupported", "没有认证后逐 UUID 的连接准入执行器；原生用户流量计数不提供并发连接数。0 表示不限，不代表设备数。"},
 		{"enabled", "", "disabled", "生产逐 UUID 启停关闭；清单中存在不代表当前有连接或可通过所有路由策略。"},
 		{"outbound", "", "disabled", "允许校验原路由、直连和中转候选；生产逐 UUID 路由写入关闭。"},
 	} {
@@ -74,7 +75,7 @@ func UUIDCatalog(raw []byte) map[string]any {
 			outs = append(outs, map[string]string{"tag": text(o["tag"]), "type": text(o["type"])})
 		}
 	}
-	return map[string]any{"inbounds": ins, "outbounds": outs, "capabilities": UUIDCapabilities(), "apply": false, "bandwidth": false, "devices": false, "quota_enforced": false, "expiry_enforced": false, "reason": "生产写入关闭：配置生效会中断连接，且可能存在外部配置写入者。可校验候选，不能保存到生产。"}
+	return map[string]any{"inbounds": ins, "outbounds": outs, "capabilities": UUIDCapabilities(), "apply": false, "bandwidth": false, "quota_enforced": false, "expiry_enforced": false, "reason": "生产写入关闭：配置生效会中断连接，且可能存在外部配置写入者。可校验候选，不能保存到生产。"}
 }
 
 func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, error) {
@@ -84,8 +85,11 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 		return nil, nil, ErrScope
 	}
 	// Unsupported enforcement must never silently become stored/display-only limits.
-	if req.Quota != 0 || req.UploadLimit != 0 || req.DownloadLimit != 0 || req.ExpiresAt != 0 || req.MaxConnections != 0 {
+	if req.UploadLimit != 0 || req.DownloadLimit != 0 {
 		return nil, nil, fmt.Errorf("实际限制执行器未启用；只接受无限制、启用状态的候选")
+	}
+	if _, err := policy.Normalize(policy.Limit{Quota: req.Quota, ExpiresAt: req.ExpiresAt, BillingDay: req.BillingDay, Timezone: req.Timezone}); err != nil {
+		return nil, nil, err
 	}
 	if req.UUID == "" {
 		var e error

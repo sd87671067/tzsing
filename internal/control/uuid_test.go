@@ -51,11 +51,17 @@ func TestUUIDCandidateOneListenerAndSecurityPolicies(t *testing.T) {
 	if _, _, e := UUIDCandidate(original, req); e == nil {
 		t.Fatal("bad UUID accepted")
 	}
-	for _, req := range []UUIDNodeRequest{{Inbound: "shared", Name: "x", Enabled: true, Quota: 1}, {Inbound: "shared", Name: "x", Enabled: true, UploadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, DownloadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, MaxConnections: 1}, {Inbound: "shared", Name: "x", Enabled: true, ExpiresAt: 1}} {
+	for _, req := range []UUIDNodeRequest{{Inbound: "shared", Name: "x", Enabled: true, UploadLimit: 1}, {Inbound: "shared", Name: "x", Enabled: true, DownloadLimit: 1}, {Inbound: "shared", Name: "x", Quota: -1}, {Inbound: "shared", Name: "x", ExpiresAt: -1}} {
 		if _, _, e := UUIDCandidate(original, req); e == nil {
-			t.Fatal("unsupported enforcement accepted")
+			t.Fatal("invalid or unsupported policy accepted")
 		}
 	}
+	for _, req := range []UUIDNodeRequest{{Inbound: "shared", Name: "x", Enabled: true, Quota: 1024}, {Inbound: "shared", Name: "x", Enabled: true, ExpiresAt: 1}} {
+		if _, _, e := UUIDCandidate(original, req); e != nil {
+			t.Fatal("supported policy rejected", e)
+		}
+	}
+
 	config = candidateMap(original)
 	object(config["route"])["rules"] = append(array(object(config["route"])["rules"]), map[string]any{"inbound": []string{"shared"}, "outbound": "direct"})
 	if _, _, e := UUIDCandidate(canonical(config), UUIDNodeRequest{Inbound: "shared", Name: "x", Enabled: true, Outbound: "relay"}); e == nil {
@@ -86,7 +92,7 @@ func TestUUIDPreviewIsReadOnlyEvenWithWriteEnabled(t *testing.T) {
 
 func TestUUIDCapabilitiesNeverClaimSavedOrEffective(t *testing.T) {
 	caps := UUIDCatalog(uuidFixture())["capabilities"].(map[string]any)
-	for _, key := range []string{"quota", "upload_limit", "download_limit", "expires_at", "max_connections", "enabled", "outbound"} {
+	for _, key := range []string{"quota", "upload_limit", "download_limit", "expires_at", "enabled", "outbound"} {
 		c, ok := caps[key].(map[string]any)
 		if !ok || c["saved"] != false || c["effective"] != false || c["reason"] == "" || (c["state"] != "unsupported" && c["state"] != "disabled") {
 			t.Fatalf("false execution capability: %s", key)

@@ -26,7 +26,7 @@ assert(process.env.TZ_SYNTHETIC_STAGE==='1'&&process.env.TZ_TEST_BASE&&process.e
    await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('#history-panel').open);
   }
   await p.locator('#tags .card--node').filter({hasText:'fixture-alice'}).locator('.node-number').click();await p.waitForFunction(()=>document.querySelector('#history-panel').open);
-  await p.locator('#check-node').click();await p.locator('#check-results').waitFor({state:'visible'});assert((await p.locator('#check-fields').textContent()).includes('2/2 次 HTTPS 成功'));assert(await p.locator('.toast-item').count()>0);
+  assert.equal(await p.locator('#detail-ip .check-ip').count(),1);await p.locator('#detail-ip .check-ip').click();await p.waitForFunction(()=>document.querySelector('.toast-item')?.textContent.includes('出口 HTTPS 检测成功'));assert.equal(await p.locator('#check-results:visible').count(),0);
   assert.equal(await p.locator('#detail-ip .copy-ip').count(),2);await p.keyboard.press('Escape');await p.waitForFunction(()=>!document.querySelector('#history-panel').open);
   await p.locator('#tags .card--node').first().focus();assert(await p.evaluate(()=>getComputedStyle(document.activeElement).outlineStyle!=='none'),'keyboard focus hidden');
   assert(frames>=2);assert.deepEqual(errors,[]);

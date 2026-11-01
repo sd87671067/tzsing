@@ -44,17 +44,22 @@ const NodeControl=(()=>{
   let saved=false;const original=input.value,m=UI.modal('重命名',form,{trigger,dirty:()=>!saved&&input.value!==original});editor=m;
   form.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;try{await api(me?.role==='admin'?'admin/nodes':'alias',me?.role==='admin'?'PATCH':'PUT',{node_id:id,name:input.value});saved=true;m.force();update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin();message('显示名称已保存')}catch(e){message(e.message)}finally{save.disabled=false}};
  }
- function unavailable(id,action,trigger){
-  const titles={quota:'编辑月流量额度',expiry:'编辑到期时间',state:'启用 / 停用',delete:'删除节点'},body=node('div','control-body');
-  body.append(node('p','notice',action==='quota'?'尚未接入完整月计量及自动封禁，额度暂不能应用。':'到期自动停用尚未接入，暂不能应用。'));
-  const close=node('button','','知道了');body.append(close);const m=UI.modal(titles[action],body,{trigger});editor=m;close.onclick=()=>m.force();
+ async function policy(id,trigger){
+  const r=rows.get(id);if(!r)return;const f=node('form','control-body'),ready=['enabled','unlimited','expired','quota_exceeded'].includes(r.t.policy_state),fields=PolicyFields.create(f,r.t,ready),state=node('p','notice','当前状态：'+policyLabel(r.t.policy_state)),save=node('button','primary','保存策略');
+  save.disabled=!ready;f.append(state,save);let live=true;const m=UI.modal('额度与有效期',f,{trigger,onClose:()=>live=false});editor=m;
+  f.onsubmit=async e=>{e.preventDefault();if(save.disabled||!f.reportValidity())return;save.disabled=true;
+   try{const values=fields.read(),p=await api('node-policy','POST',{node_id:id,action:'preview',policy:values});if(!live)return;
+    if(!await UI.confirm('确认更新此 UUID 的策略',r.t.name+'\n月额度：'+(values.quota?bytes(values.quota):'不限')+'\n到期：'+(values.expires_at?when(values.expires_at)+' · '+fields.zone:'永不过期')+'\n重置：每月 '+values.billing_day+' 日 · '+values.timezone+'\n无需重启 sing-box，其他 UUID 保持当前策略。','确认保存'))return;
+    await api('node-policy','POST',{node_id:id,action:'apply',nonce:p.nonce});if(live){m.force();update(await api('snapshot'));UI.notify('策略已由数据路径执行')}
+   }catch(err){if(live)UI.notify(err.message,'error')}finally{if(live)save.disabled=false}
+  };
  }
  async function show(id,trigger){
   if(!me)return;menu?.force();const r=rows.get(id);if(!r)return;key=id;
   const body=node('div','action-list'),items=[];
   for(const [title,action] of [['重命名显示名称','rename'],['编辑月流量额度','quota'],['编辑到期时间','expiry'],['启用 / 停用','state'],['查看流量详情','details']]){
    if(me?.role!=='admin'&&action!=='details'&&(action!=='rename'||!operations.rename))continue;
-   const b=node('button','action-item','');b.type='button';b.append(UI.icon(action==='rename'?'change':action==='details'?'check':'restore'),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else if(action==='state')mutate(id,trigger);else unavailable(id,action,trigger)};
+   const b=node('button','action-item','');b.type='button';b.append(UI.icon(action==='rename'?'change':action==='details'?'check':'restore'),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else if(action==='state')mutate(id,trigger);else policy(id,trigger)};
   }
 
   for(const [title,icon,action]of [['导入 Shadowrocket','import','import_shadowrocket'],['导入 v2rayN','import','import_v2rayn'],['复制节点链接','copy','copy'],['查看节点链接','copy','view'],['更换节点出站 IP','change','change'],['恢复原始出站','restore','restore']]){

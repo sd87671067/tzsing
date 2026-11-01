@@ -81,8 +81,8 @@ func (a *App) inspectNode(w http.ResponseWriter, r *http.Request, u store.User) 
 		payload["previous_ipv6"] = t.IP.IPv6
 	}
 	// Network checks have their own bounded budget without changing normal API timeouts.
-	http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
-	ctx, cancel := context.WithTimeout(r.Context(), 50*time.Second)
+	http.NewResponseController(w).SetWriteDeadline(time.Now().Add(20 * time.Second))
+	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
 	defer cancel()
 	out, status := a.hostControl(ctx, v.Action, payload)
 	// Permission and current identity are rechecked after potentially slow network

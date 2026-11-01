@@ -30,6 +30,10 @@ func TestUUIDInspectSelectedPathAndPermissionRevocation(t *testing.T) {
 	var calls atomic.Int64
 	var revoke atomic.Bool
 	helper := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/policy-status" {
+			w.WriteHeader(503)
+			return
+		}
 		calls.Add(1)
 		var v map[string]string
 		json.NewDecoder(r.Body).Decode(&v)

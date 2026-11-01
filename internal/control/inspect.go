@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 	"tzsingbox/internal/adapter"
 	"tzsingbox/internal/agent"
@@ -87,6 +88,10 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 	if ae == nil && len(ab) < 256<<10 && json.Unmarshal(ab, &ac) == nil {
 		inv, e := adapter.ReadInventory(ac.InventoryFile)
 		if e == nil && inv.ConfigHash == digest(raw) {
+			ac.Proxies = nil
+			if ps, err := egress.ReadPaths(filepath.Join(filepath.Dir(ac.InventoryFile), "probe-paths.json"), inv.ConfigHash); err == nil {
+				ac.Proxies = ps
+			}
 			clash := adapter.New(ac.ClashURL, ac.ClashSecret)
 			clash.SetInventory(inv)
 			if v.AuthID != "" {
@@ -110,7 +115,7 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if r.URL.Path == "/intel" {
 		if !validPath {
@@ -189,28 +194,6 @@ func (c *Controller) inspect(w http.ResponseWriter, r *http.Request, v serviceRe
 	}
 	c.inspectExits[v.Tag+":"+v.AuthID+":"+v.Outbound] = observedExit{hash: digest(raw), at: time.Now(), ipv4: network.IPv4.IP, ipv6: network.IPv6.IP}
 	ip := model.Exit{IPv4: network.IPv4.IP, IPv6: network.IPv6.IP, Verified: true, Updated: time.Now().Unix(), Attempted: time.Now().Unix(), Source: "指定出站 HTTPS", Path: t.Egress + "@" + v.RouteVersion}
-	expected := ip.IPv4
-	if expected == "" {
-		expected = ip.IPv6
-	}
-	info := egress.LookupSource(ctx, path, "ipinfo", expected, digest(raw)+"@"+t.Egress)
-	if info.Data != nil {
-		geo := *info.Data
-		geo.IPv4 = ip.IPv4
-		geo.IPv6 = ip.IPv6
-		geo.Verified = true
-		geo.Updated = ip.Updated
-		geo.Attempted = ip.Attempted
-		geo.Source = ip.Source
-		geo.Path = ip.Path
-		ip = geo
-	}
-	// Metadata lookup also uses the path; a config change invalidates its result.
-	latest, e = os.ReadFile(c.Config.Config)
-	if e != nil || digest(latest) != digest(raw) {
-		fail(409, "路由已变化，请重新检测")
-		return
-	}
 	c.audit("exit_http_success", v.Tag)
 	send(200, map[string]any{"at": ip.Updated, "outbound": t.Egress, "network": network, "ip": ip})
 }

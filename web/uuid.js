@@ -28,16 +28,15 @@ const UUIDEditor=(()=>{
     const b=UI.make('button','',label);b.type='button';b.onclick=()=>{selected=value;buttons.forEach(x=>x.b.setAttribute('aria-pressed',String(x.value===value)));outbound.replaceChildren();if(value==='original')outbound.add(new Option('沿用原路由',''));else for(const o of c.outbounds.filter(o=>(o.type==='direct')===(value==='direct')))outbound.add(new Option(o.tag+' · '+o.type,o.tag));outbound.required=value!=='original'};buttons.push({value,b});mode.append(b);
    }
    buttons[0].b.click();capability(routing,'outbound','独立出站应用');
-   const traffic=group('流量与带宽');for(const [key,label]of [['quota','独立月额度'],['upload_limit','上传限速'],['download_limit','下载限速']])capability(traffic,key,label);
+   const limits=PolicyFields.create(f,{},c.capabilities?.quota?.state==='ready'&&c.capabilities?.expires_at?.state==='ready');
    const stateGroup=group('启用状态'),enabled=add(stateGroup,'enabled','添加后启用','checkbox');enabled.checked=true;
-   const limits=group('有效期与连接限制');for(const [key,label]of [['expires_at','到期自动停用'],['max_connections','最大并发连接']])capability(limits,key,label);
-   const actions=UI.make('div','row-actions uuid-actions'),preview=UI.make('button','primary','预览并添加节点'),cancel=UI.make('button','','取消'),reset=UI.make('button','','重置');cancel.type=reset.type='button';
+   const actions=UI.make('div','row-actions uuid-actions'),preview=UI.make('button','primary','添加节点'),cancel=UI.make('button','','取消'),reset=UI.make('button','','重置');cancel.type=reset.type='button';
    cancel.onclick=()=>{clear();navigate('overview')};reset.onclick=()=>{f.reset();buttons[0].b.click();describe()};actions.append(preview,cancel,reset);f.append(actions);host.append(UI.make('p','notice',c.reason),f);preview.disabled=!c.inbounds.length;
    f.onsubmit=async e=>{
     e.preventDefault();if(preview.disabled||!f.reportValidity())return;preview.disabled=true;
     const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim();
     try{
-     const summary=await api('admin/node-preview','POST',{server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked}});
+     const summary=await api('admin/node-preview','POST',{server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}});
      if(rev!==revision||me?.role!=='admin')return;
      if(!summary.writable)throw Error(summary.reason||c.reason||'生产写入未启用');
      const description='名称：'+nodeName+'\n入站：'+inbound.value+' · '+routeLabel+'\n共享 443、REALITY 密钥和握手配置保持现有值。\n将重启整个 sing-box，所有共享连接可能中断；失败自动回滚。\n'+summary.reason;

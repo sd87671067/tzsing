@@ -51,5 +51,31 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(probe.inventory(after, True)['outbounds'][0]['tag'], 'new')
 
 
+class RuntimeProofTests(unittest.TestCase):
+    def proof(self, changed=False, argv=None, same_binary=True):
+        cfg=SimpleNamespace(stat=lambda:SimpleNamespace(st_ctime=601 if changed else 599), __fspath__=lambda:'/fixture.json')
+        # Use a real Path for os.fsencode and mock only stat/read calls.
+        with patch.object(probe,'CONFIG',pathlib.Path('/fixture.json')), \
+             patch.object(probe.subprocess,'check_output',return_value=b'123'), \
+             patch.object(pathlib.Path,'read_bytes',return_value=argv or b'/usr/local/bin/sing-box\0run\0-c\0/fixture.json\0'), \
+             patch.object(pathlib.Path,'read_text',return_value='123 (sing-box) '+' '.join(['S']+['0']*18+['10000'])), \
+             patch.object(pathlib.Path,'stat',return_value=SimpleNamespace(st_ctime=601 if changed else 599)), \
+             patch.object(probe.time,'time',return_value=1000), \
+             patch.object(probe.time,'clock_gettime',return_value=500), \
+             patch.object(probe.os,'sysconf',return_value=100), \
+             patch.object(probe.os.path,'samefile',return_value=same_binary):
+            return probe.runtime_identity()
+
+    def test_current_runtime_can_reverify_new_hash(self):
+        self.assertEqual(self.proof(),(123,10000))
+
+    def test_unapplied_disk_edit_fails_closed(self):
+        with self.assertRaises(OSError): self.proof(changed=True)
+
+    def test_ambiguous_config_and_replaced_binary_fail_closed(self):
+        with self.assertRaises(OSError): self.proof(argv=b'/usr/local/bin/sing-box\0run\0-C\0/extra\0')
+        with self.assertRaises(OSError): self.proof(same_binary=False)
+
+
 if __name__ == '__main__':
     unittest.main()

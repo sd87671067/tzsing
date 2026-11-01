@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 	"tzsingbox/internal/adapter"
 	"tzsingbox/internal/auth"
@@ -104,6 +105,10 @@ func Run(ctx context.Context, path string) error {
 					routesVerified = inv.RoutesVerified
 					routeVersion = inv.ConfigHash
 					appliedExit = inv.AppliedExit
+					c.Proxies = nil
+					if paths, err := egress.ReadPaths(filepath.Join(filepath.Dir(c.InventoryFile), "probe-paths.json"), inv.ConfigHash); err == nil {
+						c.Proxies = paths
+					}
 					if inv.RoutesVerified {
 						det.SetProxies(c.Proxies)
 					} else {

@@ -39,6 +39,7 @@ type bucket struct {
 	until time.Time
 }
 type App struct {
+	policyCache    policyCache
 	DB             *store.Store
 	Prefix, Origin string
 	TrustedProxy   string
@@ -160,6 +161,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}
+	if path == "/api/node-policy" {
+		a.nodePolicy(w, r, u)
+		return
+	}
 	if path == "/api/node-inspect" {
 		a.inspectNode(w, r, u)
 		return
@@ -177,6 +182,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500)
 			return
 		}
+		a.overlayPolicies(u, v)
 		reply(w, 200, v)
 		return
 	}
@@ -360,6 +366,7 @@ func (a *App) ws(w http.ResponseWriter, r *http.Request, u store.User, token str
 			}
 			v, err := a.DB.Views(fresh)
 			if err == nil {
+				a.overlayPolicies(fresh, v)
 				c.SetWriteDeadline(time.Now().Add(3 * time.Second))
 				err = c.WriteJSON(v)
 			}

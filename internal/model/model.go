@@ -7,6 +7,11 @@ type EgressPath struct {
 }
 
 type Tag struct {
+	PolicyState      string       `json:"policy_state,omitempty"`
+	BillableUsed     *int64       `json:"billable_used,omitempty"`
+	MeteringSince    int64        `json:"metering_since,omitempty"`
+	ShowExpiry       bool         `json:"show_expiry"`
+	ShowQuota        bool         `json:"show_quota"`
 	Egresses         []EgressPath `json:"egresses,omitempty"`
 	AuthName         string       `json:"auth_name,omitempty"`
 	AccountingReason string       `json:"accounting_reason,omitempty"`

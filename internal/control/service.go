@@ -17,9 +17,11 @@ import (
 	"time"
 	"tzsingbox/internal/auth"
 	"tzsingbox/internal/model"
+	"tzsingbox/policy"
 )
 
 type ServiceConfig struct {
+	PolicyDB       string              `json:"policy_db,omitempty"`
 	AgentConfig    string              `json:"agent_config,omitempty"`
 	Config         string              `json:"config"`
 	State          string              `json:"state"`
@@ -34,6 +36,7 @@ type ServiceConfig struct {
 	Endpoints      map[string]Endpoint `json:"endpoints"`
 }
 type plan struct {
+	Policy         *policy.Limit
 	Hash, Tag      string
 	AuthID, Action string
 	Candidate      []byte
@@ -57,6 +60,7 @@ type ApplyHooks struct {
 	Probe    func(map[string]any) error
 }
 type serviceRequest struct {
+	Policy       *policy.Limit    `json:"policy,omitempty"`
 	Outbound     string           `json:"outbound,omitempty"`
 	RouteVersion string           `json:"route_version,omitempty"`
 	Node         *UUIDNodeRequest `json:"node,omitempty"`
@@ -415,7 +419,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(400, "请求无效")
 		return
 	}
-	if v.AuthID != "" && r.URL.Path != "/status" && r.URL.Path != "/share" && r.URL.Path != "/diagnostics" && r.URL.Path != "/intel" && r.URL.Path != "/preview" && r.URL.Path != "/restore-preview" && r.URL.Path != "/apply" {
+	if v.AuthID != "" && r.URL.Path != "/policy-preview" && r.URL.Path != "/policy-apply" && r.URL.Path != "/status" && r.URL.Path != "/share" && r.URL.Path != "/diagnostics" && r.URL.Path != "/intel" && r.URL.Path != "/preview" && r.URL.Path != "/restore-preview" && r.URL.Path != "/apply" {
 		fail(403, "认证身份的独立路由或检测尚不可用")
 		return
 	}
@@ -455,9 +459,21 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writerReason = e.Error()
 		}
 	}
+	if r.URL.Path == "/policy-status" || r.URL.Path == "/policy-preview" || r.URL.Path == "/policy-apply" {
+		c.policyRequest(w, r, v, raw, writeEnabled)
+		return
+	}
 	if r.URL.Path == "/uuid-catalog" {
 		catalog := UUIDCatalog(raw)
 		catalog["apply"] = writeEnabled
+		if c.policyReady() {
+			caps := catalog["capabilities"].(map[string]any)
+			for _, k := range []string{"quota", "expires_at"} {
+				caps[k] = map[string]any{"state": "ready", "reason": "认证后数据路径执行；SQLite 分别持久化实际结算与未决预留。"}
+			}
+			catalog["quota_enforced"] = true
+			catalog["expiry_enforced"] = true
+		}
 		if writeEnabled {
 			caps := catalog["capabilities"].(map[string]any)
 			for _, key := range []string{"enabled", "outbound"} {
@@ -474,6 +490,10 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/uuid-preview" {
 		if v.Node == nil {
 			fail(400, "缺少节点参数")
+			return
+		}
+		if (v.Node.Quota != 0 || v.Node.ExpiresAt != 0) && !c.policyReady() {
+			fail(503, "可靠限制执行器尚未运行，未保存或应用")
 			return
 		}
 		candidate, summary, err := UUIDCandidate(raw, *v.Node)
@@ -500,7 +520,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := auth.Random()
 		authID := text(summary["auth_id"])
 		delete(summary, "auth_id")
-		c.plans[auth.Digest(id)] = plan{Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
+		c.plans[auth.Digest(id)] = plan{Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Policy: &policy.Limit{Quota: v.Node.Quota, ExpiresAt: v.Node.ExpiresAt, BillingDay: v.Node.BillingDay, Timezone: v.Node.Timezone}, Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
 		summary["plan"] = id
 		summary["writable"] = writeEnabled
 		summary["effects"] = impact(config, v.Node.Inbound, "")
@@ -521,7 +541,34 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(409, "确认过期或已使用")
 			return
 		}
+		var ledger *policy.Ledger
+		var user string
+		if p.Policy != nil && (p.Policy.Quota != 0 || p.Policy.ExpiresAt != 0) {
+			if !c.policyReady() {
+				fail(503, "可靠执行器暂不可用")
+				return
+			}
+			ledger, e = policy.Open(c.Config.PolicyDB)
+			if e != nil {
+				fail(503, "策略数据库不可用")
+				return
+			}
+			defer ledger.Close()
+			u, err := identityUser(candidateMap(p.Candidate), p.Tag, p.AuthID)
+			if err != nil {
+				fail(409, "身份已变化")
+				return
+			}
+			user = model.UUIDAuthID(text(u["uuid"]))
+			if e = ledger.Set(p.Tag, user, *p.Policy); e != nil {
+				fail(422, e.Error())
+				return
+			}
+		}
 		if err := c.apply(p); err != nil {
+			if ledger != nil {
+				ledger.Remove(p.Tag, user)
+			}
 			fail(409, err.Error())
 			return
 		}

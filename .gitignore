@@ -26,3 +26,5 @@ compose.production.yaml
 *-ACCEPTANCE*.md
 ACCEPTANCE.md
 HTTPS-MAINTENANCE-*.md
+
+/sing-box-policy

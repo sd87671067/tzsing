@@ -24,7 +24,6 @@ VLESS 的管理单位是一个 UUID。可信宿主机清单将规范化 UUID（�
 
 - 现有额度、账期和到期字段保留为监控提醒；无可靠持久计费执行器，不会自动扣费、停认证或踢连接。
 - 1.13.15 VLESS 用户选项没有每用户上传/下载限速。未实现新的数据路径限速执行器，配置项禁用，不能声称限速生效。
-- VLESS UUID 不能识别物理设备；源 IP、连接数都不是设备数。可验证的后续方案是在认证后的连接/数据包路径设置共享每 UUID 并发会话计数和令牌桶，正确处理 TCP/UDP、mux、关闭、取消及热更新；本版本未接入，配置项禁用。
 - UUID 新增、单身份出站更换恢复、启停和删除均支持预览/确认/事务应用。先落实唯一配置写入者，应用会重启 sing-box 并可能中断共享 443 连接。额度强制与到期自动停用仍未实现。
 - UUID 出口尚无逐身份路径证明时继续明确未知；不会将共享 SOCKS 探针出口复制给每个 UUID。现有 IPinfo/IPPure、复制 IP 和历史组件保留，但没有可靠身份路径时不能展示虚构 IP。
 
@@ -32,7 +31,7 @@ VLESS 的管理单位是一个 UUID。可信宿主机清单将规范化 UUID（�
 
 正式验证宿主为 sd87671067/go-emby-test 最新 main 下独立隐藏工程；生产配置、账户和数据库不用于写入测试。定向测试包括身份迁移/幂等/授权、12 空闲卡片、候选和原规则保护、禁用写入、CSRF、单 UUID 分享、Clash/原生计数、候选检查失败恢复，以及 Chromium/WebKit 移动视口。
 
-真正的物理设备限额、带宽限速、配额/到期认证停用没有实现，因此没有将这些条目标为测试通过。原生客户端只验证标准 URI 与剪贴板流程，未冒充 Shadowrocket/v2rayN 实机测试。
+带宽限速、配额/到期认证停用没有实现，因此没有将这些条目标为测试通过。原生客户端只验证标准 URI 与剪贴板流程，未冒充 Shadowrocket/v2rayN 实机测试。
 
 
 版本依据：[VLESS 认证设置 metadata.User](https://github.com/SagerNet/sing-box/blob/v1.13.15/protocol/vless/inbound.go)、[Clash JSON 元数据](https://github.com/SagerNet/sing-box/blob/v1.13.15/experimental/clashapi/trafficontrol/tracker.go)、[原生用户计数器](https://github.com/SagerNet/sing-box/blob/v1.13.15/experimental/v2rayapi/stats.go)、[auth_user 路由匹配](https://sing-box.sagernet.org/configuration/route/rule/#auth_user)。
