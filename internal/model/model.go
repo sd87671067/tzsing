@@ -69,6 +69,7 @@ type Exit struct {
 	MetadataCached bool   `json:"metadata_cached,omitempty"`
 	MetadataAt     int64  `json:"metadata_at,omitempty"`
 	IPType         string `json:"ip_type,omitempty"`
+	ISP            string `json:"isp,omitempty"`
 	Native         *bool  `json:"native,omitempty"`
 	Residential    *bool  `json:"residential,omitempty"`
 	Datacenter     *bool  `json:"datacenter,omitempty"`

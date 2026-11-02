@@ -193,17 +193,18 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 		// Official https://ippure.com/MyIP-Info-API: this endpoint reports
 		// the caller's IP only. Never request arbitrary-IP pages or bypass controls.
 		var v struct {
-			IP          string `json:"ip"`
-			ASN         int64  `json:"asn"`
-			Org         string `json:"asOrganization"`
-			Country     string `json:"country"`
-			CountryCode string `json:"countryCode"`
-			City        string `json:"city"`
-			Fraud       *int   `json:"fraudScore"`
-			Residential *bool  `json:"isResidential"`
-			Datacenter  *bool  `json:"isDatacenter"`
-			Native      *bool  `json:"isNative"`
-			Broadcast   *bool  `json:"isBroadcast"`
+			IP          string          `json:"ip"`
+			ISP         json.RawMessage `json:"isp"`
+			ASN         int64           `json:"asn"`
+			Org         string          `json:"asOrganization"`
+			Country     string          `json:"country"`
+			CountryCode string          `json:"countryCode"`
+			City        string          `json:"city"`
+			Fraud       *int            `json:"fraudScore"`
+			Residential json.RawMessage `json:"isResidential"`
+			Datacenter  json.RawMessage `json:"isDatacenter"`
+			Native      json.RawMessage `json:"isNative"`
+			Broadcast   *bool           `json:"isBroadcast"`
 		}
 		err = fixedJSON(ctx, client, "https://my.ippure.com/v1/info", &v)
 		if err != nil {
@@ -211,7 +212,7 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 		} else if !publicIP(v.IP) || !net.ParseIP(v.IP).Equal(net.ParseIP(expected)) {
 			out.Message = "IPPure 返回的出口与当前缓存不一致；未关联质量信息，请重新检测"
 		} else {
-			dst := model.Exit{Country: v.Country, CountryCode: v.CountryCode, City: v.City, Org: v.Org, Residential: v.Residential, Datacenter: v.Datacenter, Native: v.Native, GeoSource: "IPPure 官方公开 API", MetadataAt: now.Unix()}
+			dst := model.Exit{ISP: optionalText(v.ISP), Country: v.Country, CountryCode: v.CountryCode, City: v.City, Org: v.Org, Residential: optionalBool(v.Residential), Datacenter: optionalBool(v.Datacenter), Native: optionalBool(v.Native), GeoSource: "IPPure 官方公开 API", MetadataAt: now.Unix()}
 			if v.ASN > 0 {
 				dst.ASN = "AS" + strconv.FormatInt(v.ASN, 10)
 			}
@@ -221,6 +222,7 @@ func lookupSource(ctx context.Context, p Proxy, source, expected, path string, o
 				dst.QualitySource = "IPPure fraudScore（来源值）"
 				dst.QualityAt = now.Unix()
 			}
+			normalizeOptionalIntel(&dst)
 			// isBroadcast is not a residential, native or datacenter assertion.
 			out.Data = &dst
 			out.At = now.Unix()

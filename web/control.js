@@ -58,20 +58,20 @@ const NodeControl=(()=>{
  }
  async function show(id,trigger){
   if(!me)return;menu?.force();const r=rows.get(id);if(!r)return;key=id;
-  const body=node('div','action-list'),items=[];
+  const body=node('div','action-list'),items=[];let personal=null;
   for(const [title,action] of [['重命名显示名称','rename'],['编辑月流量额度','quota'],['编辑到期时间','expiry'],['启用 / 停用','state'],['查看流量详情','details']]){
    if(me?.role!=='admin'&&action!=='details'&&(action!=='rename'||!operations.rename))continue;
-   const b=node('button','action-item','');b.type='button';b.append(UI.icon(action==='rename'?'change':action==='details'?'check':'restore'),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else if(action==='state')mutate(id,trigger);else policy(id,trigger)};
+   const b=node('button','action-item','');b.type='button';b.append(UI.icon(({rename:'edit',details:'chart',quota:'quota',expiry:'calendar',state:'power'})[action]),node('span','',title));body.append(b);b.onclick=()=>{m.force();if(action==='rename')rename(id,trigger);else if(action==='details')showHistory(id);else if(action==='state')mutate(id,trigger);else policy(id,trigger)};
   }
 
-  if(me.role!=='admin') {const personal=node('button','action-item','管理个人出站');personal.type='button';personal.onclick=()=>{m.force();PersonalOutbounds.open(id,trigger)};body.append(personal)}
-  for(const [title,icon,action]of [['导入 Shadowrocket','import','import_shadowrocket'],['导入 v2rayN','import','import_v2rayn'],['复制节点链接','copy','copy'],['查看节点链接','copy','view'],['更换节点出站 IP','change','change'],['恢复原始出站','restore','restore']]){
+  if(me.role!=='admin') {personal=node('button','action-item');personal.append(UI.icon('outbounds'),node('span','','管理个人出站'));personal.hidden=true;personal.type='button';personal.onclick=()=>{m.force();PersonalOutbounds.open(id,trigger)};body.append(personal)}
+  for(const [title,icon,action]of [['导入 Shadowrocket','import','import_shadowrocket'],['导入 v2rayN','import','import_v2rayn'],['复制节点链接','copy','copy'],['查看节点链接','info','view'],['更换节点出站 IP','change','change'],['恢复原始出站','restore','restore']]){
    const b=node('button','action-item'+(action==='restore'?' danger':''));b.type='button';b.disabled=true;b.append(UI.icon(icon),node('span','',title));body.append(b);items.push([b,action]);if(me?.role!=='admin')b.hidden=!operations[action];b.onclick=()=>{if(b.disabled)return;m.force();if(action==='change'||action==='restore')edit(id,trigger,action==='restore');else share(id,action,trigger)}
   }
   const previewOnly=node('button','action-item');previewOnly.type='button';previewOnly.hidden=true;previewOnly.append(UI.icon('change'),node('span','','解析出站链接（只读）'));previewOnly.onclick=()=>{m.force();edit(id,trigger,false,true)};body.append(previewOnly);
   const status=node('p','notice','正在检查独立权限与入站资料…');body.append(status);
-  const del=node('button','action-item danger');del.hidden=me?.role!=='admin';del.type='button';del.disabled=true;del.append(UI.icon('close'),node('span','','删除节点'));del.onclick=()=>{m.force();mutate(id,trigger,'delete')};body.append(del);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
-  try{const g=await gate(id);if(menu!==m||!m.d.open)return;del.disabled=!g.delete;del.title=g.delete_reason||'';for(const[b,action]of items){if(me?.role!=='admin')b.hidden=!g.actions?.[action];b.disabled=action==='change'?!g.apply||g.actions?.change===false:action==='restore'?!g.restore:!g.share||!g.actions?.[action];b.title=b.disabled?(action==='restore'?(g.restore_reason||g.reason):g.reason)||'此入站、权限或控制条件不满足':''}previewOnly.hidden=!!g.apply||!g.preview||g.actions?.change===false;text(status,g.reason+(g.delete_reason?'；删除：'+g.delete_reason:'')+(!g.restore&&g.restore_reason?'；恢复：'+g.restore_reason:''))}catch(e){if(menu===m)text(status,e.message)}
+  const del=node('button','action-item danger');del.hidden=me?.role!=='admin';del.type='button';del.disabled=true;del.append(UI.icon('delete'),node('span','','删除节点'));del.onclick=()=>{m.force();mutate(id,trigger,'delete')};body.append(del);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
+  try{const g=await gate(id);if(menu!==m||!m.d.open)return;if(personal)personal.hidden=!operations.change||!g.actions?.change;del.disabled=!g.delete;del.title=g.delete_reason||'';for(const[b,action]of items){if(me?.role!=='admin')b.hidden=!g.actions?.[action];b.disabled=action==='change'?!g.apply||g.actions?.change===false:action==='restore'?!g.restore:!g.share||!g.actions?.[action];b.title=b.disabled?(action==='restore'?(g.restore_reason||g.reason):g.reason)||'此入站、权限或控制条件不满足':''}previewOnly.hidden=!!g.apply||!g.preview||g.actions?.change===false;text(status,g.reason+(g.delete_reason?'；删除：'+g.delete_reason:'')+(!g.restore&&g.restore_reason?'；恢复：'+g.restore_reason:''))}catch(e){if(menu===m)text(status,e.message)}
  }
  function confirmationText(r,e,change){
   if(!e)return '缺少可靠影响预览，请重新预览。';

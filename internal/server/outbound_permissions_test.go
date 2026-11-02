@@ -210,11 +210,33 @@ func TestPersonalOutboundLifecyclePermissionsAndSecrets(t *testing.T) {
 		}
 		return out
 	}
+	// The global change permission protects every endpoint before host calls.
+	for _, action := range []string{"create", "edit", "delete", "test", "apply"} {
+		post(map[string]any{"node_id": "uuid", "action": action}, 403)
+	}
+	denied := f.req(t, "GET", "/api/personal-outbounds?node_id=uuid", nil, f.user, "")
+	denied.Body.Close()
+	if denied.StatusCode != 403 {
+		t.Fatal("disabled catalog", denied.StatusCode)
+	}
+	admin := f.req(t, "GET", "/api/personal-outbounds?node_id=uuid", nil, f.admin, "")
+	admin.Body.Close()
+	if admin.StatusCode != 200 {
+		t.Fatal("admin exemption", admin.StatusCode)
+	}
+	f.db.Exec("INSERT INTO user_operations VALUES(2,'change')")
 	for _, action := range []string{"test", "edit", "delete"} {
 		post(map[string]any{"node_id": "uuid", "action": action, "id": private.ID, "name": "x", "link": "http://synthetic:secret@example.org:443"}, 403)
 	}
 	post(map[string]any{"node_id": "uuid", "action": "create", "id": private.ID, "name": "x", "link": "http://example.org:443"}, 403)
 	p := post(map[string]any{"node_id": "uuid", "action": "create", "name": "Personal", "link": "http://synthetic:secret@example.org:443"}, 200)
+	// Revoking the switch invalidates even an already previewed change.
+	f.db.Exec("DELETE FROM user_operations WHERE user_id=2")
+	post(map[string]any{"node_id": "uuid", "action": "apply", "nonce": p["nonce"]}, 403)
+	if applies != 0 {
+		t.Fatal("revoked personal change reached host")
+	}
+	f.db.Exec("INSERT INTO user_operations VALUES(2,'change')")
 	oid := p["id"].(string)
 	if o, e := f.db.Outbound(oid); e != nil || o.Owner != 2 {
 		t.Fatal("personal ownership lost", e)

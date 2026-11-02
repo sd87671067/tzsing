@@ -67,7 +67,7 @@ func (a *App) personalOutbounds(w http.ResponseWriter, r *http.Request, u store.
 		fail(w, 403)
 		return
 	}
-	if u.Disabled {
+	if u.Disabled || u.Role != "admin" && !a.controlPermission(u, "change") {
 		fail(w, 403)
 		return
 	}

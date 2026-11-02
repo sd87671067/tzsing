@@ -117,7 +117,6 @@ const protocolName=t=>({vless:'VLESS',vmess:'VMess',trojan:'Trojan',socks:'SOCKS
 function renderDetails(r){
  const t=r.t;text($('#history-title'),t.name+' · IP 信息');text($('#detail-raw'),t.raw_tag?'Tag · '+t.raw_tag:'');$('#detail-raw').hidden=!t.raw_tag;
  text($('#detail-status'),r.s.name+' · '+t.category+' · '+protocolName(t.type)+' · 当前连接 '+(t.active??NA)+(t.identity==='inbound'?' · '+(t.egresses?.length?'出站 '+t.egresses.map((p,i)=>p.tag||'出口 '+(i+1)).join(' / '):t.egress?'出站 '+t.egress:t.route_reason||'路径待检测'):''));
- text($('#detail-flow'),t.accounting==='unavailable'?(t.accounting_reason||'没有可用的 UUID 认证计量数据；当前连接未提供可验证的身份映射。'):!r.s.online?'监控离线；历史为已观测用量。':'实时 ↑ '+rate(t.up)+' / ↓ '+rate(t.down)+' · '+(t.accounting_reason||'原生认证用户计数，非完整账单'));
  const totals=[['今日',t.today_upload,t.today_download],['本月',t.month_upload,t.month_download],['累计',t.upload,t.download]].map(v=>t.accounting==='unavailable'?[v[0],null,null]:v);
  const group=$('#detail-totals');for(let i=0;i<totals.length;i++){let cell=group.children[i];if(!cell){cell=node('div','stat-cell');cell.append(node('span'),node('strong'),node('small'));group.append(cell)}text(cell.children[0],totals[i][0]);text(cell.children[1],bytes(totals[i][1]==null||totals[i][2]==null?null:totals[i][1]+totals[i][2]));text(cell.children[2],'↑ '+bytes(totals[i][1])+' · ↓ '+bytes(totals[i][2]))}
  text($('#detail-quota'),quotaText(t));$('#detail-quota').hidden=!t.show_quota;

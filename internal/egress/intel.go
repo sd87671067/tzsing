@@ -121,24 +121,23 @@ func (m *ipinfo) enrich(ctx context.Context, client *http.Client, ip string, dst
 		return
 	}
 	var v struct {
-		IP          string          `json:"ip"`
-		Country     string          `json:"country"`
-		CountryCode string          `json:"country_code"`
-		City        string          `json:"city"`
-		Org         string          `json:"org"`
-		ASN         json.RawMessage `json:"asn"`
+		IP          string                           `json:"ip"`
+		Country     string                           `json:"country"`
+		CountryCode string                           `json:"country_code"`
+		City        string                           `json:"city"`
+		Org         string                           `json:"org"`
+		ASN         json.RawMessage                  `json:"asn"`
+		AS          struct{ ASN, Name, Type string } `json:"as"`
+		ISP         json.RawMessage                  `json:"isp"`
 		Geo         struct {
 			Country     string `json:"country"`
 			CountryCode string `json:"country_code"`
 			City        string `json:"city"`
 		} `json:"geo"`
-		Company struct {
-			Type string `json:"type"`
-		} `json:"company"`
 		Privacy struct {
-			Hosting *bool `json:"hosting"`
+			Hosting json.RawMessage `json:"hosting"`
 		} `json:"privacy"`
-		Hosting *bool `json:"is_hosting"`
+		Hosting json.RawMessage `json:"is_hosting"`
 	}
 	if json.NewDecoder(io.LimitReader(res.Body, 32<<10)).Decode(&v) != nil || net.ParseIP(v.IP) == nil || !net.ParseIP(v.IP).Equal(net.ParseIP(ip)) {
 		m.failed(now)
@@ -181,21 +180,33 @@ func (m *ipinfo) enrich(ctx context.Context, client *http.Client, ip string, dst
 			if obj.Name != "" {
 				fresh.Org = obj.Name
 			}
-			fresh.IPType = ipType(obj.Type)
+			if obj.Type == "isp" {
+				fresh.ISP = cleanOptional(obj.Name)
+			}
 		}
 	}
-	if fresh.IPType == "" {
-		fresh.IPType = ipType(v.Company.Type)
+	if v.AS.ASN != "" {
+		fresh.ASN = v.AS.ASN
 	}
-	fresh.Datacenter = v.Privacy.Hosting
-	if v.Hosting != nil {
-		fresh.Datacenter = v.Hosting
+	if v.AS.Name != "" {
+		fresh.Org = v.AS.Name
+	}
+	if v.AS.Type == "isp" {
+		fresh.ISP = cleanOptional(v.AS.Name)
+	}
+	if explicit := optionalText(v.ISP); explicit != "" {
+		fresh.ISP = explicit
+	}
+	fresh.Datacenter = optionalBool(v.Privacy.Hosting)
+	if hosting := optionalBool(v.Hosting); hosting != nil {
+		fresh.Datacenter = hosting
 	}
 	if fresh.Datacenter != nil {
 		fresh.QualitySource = "IPinfo · 来源明确返回的托管属性"
 		fresh.QualityIP = ip
 		fresh.QualityAt = now.Unix()
 	}
+	normalizeOptionalIntel(&fresh)
 	copyIntel(dst, fresh)
 	dst.MetadataAt = fresh.MetadataAt
 	dst.MetadataCached = false
@@ -218,18 +229,41 @@ func (m *ipinfo) failed(now time.Time) {
 	m.failures = min(m.failures+1, 6)
 	m.next = now.Add(time.Duration(30*(1<<m.failures)) * time.Second)
 }
-func ipType(v string) string {
-	switch v {
-	case "isp":
-		return "互联网接入服务商"
-	case "hosting":
-		return "托管网络"
-	case "business":
-		return "企业网络"
-	case "education":
-		return "教育网络"
+
+// A network/company classification is not proof of a residential address.
+func optionalBool(raw json.RawMessage) *bool {
+	var value *bool
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
 	}
-	return ""
+	return value
+}
+func optionalText(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return cleanOptional(value)
+}
+func cleanOptional(v string) string {
+	v = strings.TrimSpace(v)
+	switch strings.ToLower(v) {
+	case "unknown", "n/a", "null", "undefined", "未知", "-", "—":
+		return ""
+	}
+	return v
+}
+func normalizeOptionalIntel(v *model.Exit) {
+	v.ISP = cleanOptional(v.ISP)
+	v.IPType = ""
+	residential := v.Residential != nil && *v.Residential
+	datacenter := v.Datacenter != nil && *v.Datacenter
+	if residential && !datacenter {
+		v.IPType = "住宅"
+	}
+	if datacenter && !residential {
+		v.IPType = "机房"
+	}
 }
 func copyIntel(dst *model.Exit, src model.Exit) {
 	dst.Country = src.Country
@@ -239,6 +273,7 @@ func copyIntel(dst *model.Exit, src model.Exit) {
 	dst.Org = src.Org
 	dst.GeoSource = src.GeoSource
 	dst.IPType = src.IPType
+	dst.ISP = cleanOptional(src.ISP)
 	dst.Native = src.Native
 	dst.Residential = src.Residential
 	dst.Datacenter = src.Datacenter
@@ -247,4 +282,5 @@ func copyIntel(dst *model.Exit, src model.Exit) {
 	dst.QualityAt = src.QualityAt
 	dst.QualityIP = src.QualityIP
 	dst.QualityError = src.QualityError
+	normalizeOptionalIntel(dst)
 }
