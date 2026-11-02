@@ -75,12 +75,13 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return
 	}
 	var v struct {
-		Node     string `json:"node_id"`
-		Outbound string `json:"outbound"`
-		Link     string `json:"link"`
-		Nonce    string `json:"nonce"`
-		Action   string `json:"action"`
-		Profile  string `json:"profile"`
+		EditVersion string `json:"edit_version"`
+		Node        string `json:"node_id"`
+		Outbound    string `json:"outbound"`
+		Link        string `json:"link"`
+		Nonce       string `json:"nonce"`
+		Action      string `json:"action"`
+		Profile     string `json:"profile"`
 	}
 	if path == "status" && r.Method == "GET" {
 		v.Node = r.URL.Query().Get("node_id")
@@ -143,6 +144,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 		return token
 	}
 	payload := map[string]string{"tag": tag}
+	if v.EditVersion != "" {
+		payload["hash"] = v.EditVersion
+	}
 	if authID != "" {
 		payload["auth_id"] = authID
 	}

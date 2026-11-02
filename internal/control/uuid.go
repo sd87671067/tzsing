@@ -177,7 +177,7 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 	if stats["enabled"] == true {
 		stats["users"] = append(array(stats["users"]), authName)
 	}
-	return canonical(config), map[string]any{"valid": true, "apply": false, "auth_id": model.UUIDAuthID(req.UUID), "name": strings.TrimSpace(req.Name), "shared_listener": true, "new_listeners": 0, "sni_shared": true, "authentication": "新增独立 UUID；凭据仅存在候选校验内存中", "routing": "原规则优先；新增身份精确匹配", "reason": "预览未写入；二次确认后校验、原子写入、重启及真实 UUID 路径验证"}, nil
+	return configBytes(config), map[string]any{"valid": true, "apply": false, "auth_id": model.UUIDAuthID(req.UUID), "name": strings.TrimSpace(req.Name), "shared_listener": true, "new_listeners": 0, "sni_shared": true, "authentication": "新增独立 UUID；凭据仅存在候选校验内存中", "routing": "原规则优先；新增身份精确匹配", "reason": "预览未写入；二次确认后校验、原子写入、重启及真实 UUID 路径验证"}, nil
 }
 
 func definitelyExcludes(rule map[string]any, inbound, user string) bool {

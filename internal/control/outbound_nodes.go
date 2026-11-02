@@ -144,7 +144,7 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 			}
 		}
 		config["outbounds"] = outs
-		return canonical(config), nil, nil
+		return configBytes(config), nil, nil
 	}
 	tag := v.Tag
 	if tag == "" {
@@ -192,6 +192,8 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 			port = float64(n)
 		case float64:
 			port = n
+		case json.Number:
+			port, _ = n.Float64()
 		}
 		if port < 1 || port > 65535 || port != float64(int(port)) {
 			return nil, nil, ErrLink
@@ -210,14 +212,19 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 		}
 	}
 	config["outbounds"] = outs
-	return canonical(config), out, nil
+	return configBytes(config), out, nil
 }
 func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v serviceRequest, raw []byte, writeEnabled bool) {
 	fail := func(status int, msg string) {
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(map[string]string{"error": msg})
 	}
-	send := func(v any) { json.NewEncoder(w).Encode(v) }
+	send := func(v any) {
+		if m, ok := v.(map[string]any); ok {
+			m["edit_version"] = digest(raw)
+		}
+		json.NewEncoder(w).Encode(v)
+	}
 	config := candidateMap(raw)
 	if r.URL.Path == "/outbound-catalog" {
 		items := []any{}
@@ -286,7 +293,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 				}
 			}
 			out = pinned
-			candidate = canonical(config)
+			candidate = configBytes(config)
 		}
 		if e = c.check(candidate); e != nil {
 			fail(422, e.Error())
@@ -316,7 +323,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 		if out != nil {
 			tag = text(out["tag"])
 		}
-		c.plans[auth.Digest(token)] = plan{Hash: digest(raw), Tag: tag, Action: "outbound-" + v.Action, Candidate: candidate, Snapshot: Snapshot{Outbound: out}, Expires: time.Now().Add(2 * time.Minute)}
+		c.plans[auth.Digest(token)] = plan{Base: append([]byte(nil), raw...), Hash: digest(raw), Tag: tag, Action: "outbound-" + v.Action, Candidate: candidate, Snapshot: Snapshot{Outbound: out}, Expires: time.Now().Add(2 * time.Minute)}
 		send(map[string]any{"plan": token, "tag": tag, "ip": c.lastIP, "restart": true, "reason": "出站保存将重启整个 sing-box，共享 443 连接可能中断；失败自动恢复原配置并验证服务。"})
 		return
 	}

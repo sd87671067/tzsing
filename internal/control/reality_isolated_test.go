@@ -379,7 +379,7 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 	if _, err = deletionUser(actual, freshID); err == nil {
 		t.Fatal("deleted identity still in running config")
 	}
-	if actual["listen_port"] != float64(443) || !reflect.DeepEqual(actual["tls"], findInbound(candidateMap(afterCreate), "shared")["tls"]) {
+	if integerPort(actual["listen_port"]) != 443 || !reflect.DeepEqual(actual["tls"], findInbound(candidateMap(afterCreate), "shared")["tls"]) {
 		t.Fatal("443 or REALITY changed")
 	}
 	journals, _ := c.journals()

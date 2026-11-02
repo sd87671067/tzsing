@@ -46,10 +46,11 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		return
 	}
 	var v struct {
-		Action string                      `json:"action"`
-		Name   string                      `json:"name"`
-		Node   control.OutboundNodeRequest `json:"node"`
-		Nonce  string                      `json:"nonce"`
+		EditVersion string                      `json:"edit_version"`
+		Action      string                      `json:"action"`
+		Name        string                      `json:"name"`
+		Node        control.OutboundNodeRequest `json:"node"`
+		Nonce       string                      `json:"nonce"`
 	}
 	if !read(w, r, &v) {
 		return
@@ -154,7 +155,7 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		fail(w, 500)
 		return
 	}
-	out, status := a.hostControl(r.Context(), "outbound-preview", map[string]any{"action": v.Action, "outbound_node": v.Node})
+	out, status := a.hostControl(r.Context(), "outbound-preview", map[string]any{"action": v.Action, "outbound_node": v.Node, "hash": v.EditVersion})
 	if status == 200 {
 		plan, _ := out["plan"].(string)
 		delete(out, "plan")

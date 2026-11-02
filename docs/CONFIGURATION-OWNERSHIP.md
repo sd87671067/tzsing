@@ -1,23 +1,58 @@
-# Configuration ownership and UUID operations
+# Shared sing-box configuration transactions
 
-The host controller is the only configuration writer for its configured sing-box instance. The web container receives a Unix socket, never the production configuration, private keys, host service socket or Docker socket. Before enabling `write_enabled`, stop independent writers and prevent their automatic restart. Stopping a bot also pauses any forwarding, policy collection and Telegram functions it provides; preserve its image, container, source and persistent data.
+The production configuration is the authority. Both tzsingbox and sbbot may edit
+it. They submit changes to the host controller, which holds its process mutex and
+cross-process `apply.lock` throughout validation, activation and rollback. The Bot
+has full configuration read/write functionality through a root-authenticated Unix
+socket. It needs no privileged container, host PID namespace or Linux capabilities.
+Its configuration bind mount may remain read-only because all writes use this API.
+The Web peer cannot use the root-only `/sbbot-*` endpoints (SO_PEERCRED).
 
-Administrators still require dedicated `change`, `restore`, and sharing permissions, provisioned with `grant-control`. Ordinary users cannot create, delete or enable/disable UUIDs; explicitly granted outbound operations remain scoped to their authorized UUID. Restore requires a snapshot created by a previous successful change. An untouched UUID has no tzsing restore snapshot.
+Every edit retains its immutable opening snapshot and SHA256. Before saving, the
+controller re-reads the production file and three-way merges base, desired and
+latest. Independent map fields, tagged inbounds/outbounds, users and unambiguous
+route predicates merge. Concurrent scalar edits, ambiguous route identities,
+duplicate route predicates during a concurrent edit, and concurrent reordering
+are rejected with a refresh message. Existing array order is retained. New entries
+are inserted relative to their next surviving anchor. The final byte hash is
+checked again under the shared lock immediately before atomic write.
 
-Each mutation follows preview, a session-bound single-use confirmation, a two-minute expiry, configuration hash checks under an exclusive host lock, validation of both configurations, durable backup and transaction journal, atomic write, sing-box restart, listener health and actual client-path checks. Changes never restart Docker or change another service's configuration. The confirmation warns that all existing connections, including shared 443 connections, may reconnect. Failed restart or health checks restore the original configuration. Recovery refuses to overwrite a subsequent external edit. Snapshots are rebased across validated internal operations only when their prior baseline matches the transaction input.
+The controller checks the original and candidate using sing-box check, writes an
+fsynced backup and transaction journal, atomically replaces the configuration,
+restarts sing-box, and checks service/listener health. Verified Bot UUID bindings
+also check the actual user path and expected exit IP inside the transaction. Any
+failure restores the exact original bytes and snapshots, restarts and checks the
+original service. Interrupted transactions recover before accepting requests;
+external uncooperative edits cause recovery to fail closed with backups preserved.
+Snapshot restoration removes exact recorded additions; it never restores whole
+old configuration files over newer work.
 
-Generic writable-descriptor detection supplements version checks. Descriptors hidden by the service sandbox and writers that have not opened the configuration cannot be discovered this way. This is not a substitute for sole-writer ownership. Keep other configuration tools stopped; manual edits invalidate stale previews, and conflicting rollback preserves the transaction for operator recovery.
+REALITY SNI changes coordinate the single standard HAProxy REALITY ACL with the
+same transaction, including HAProxy syntax validation, version comparison, reload,
+health and exact rollback/recovery. Unrelated ACLs are retained. Creating new
+independent listeners opens only their needed TCP/UDP UFW ports if UFW is active;
+existing allows are retained and rollback removes only rules added by that
+transaction with the dedicated comment. This host uses nftables: UFW status works
+without CAP_NET_RAW and fails without CAP_NET_ADMIN. The controller consequently
+needs CAP_NET_ADMIN for this feature; sbbot keeps cap_drop ALL.
 
-Keep `RuntimeDirectoryPreserve=yes` so restarting the controller preserves the socket directory mounted into the web container. Recreate the web container once when migrating from an older directory mount. The controller's subprocess probes need `AF_NETLINK` to discover Linux route updates. Keep the remaining service hardening and permit writes only to the configuration directory and controller state. The old read-only drop-in and its systemd/DBus exclusions must be replaced before enabling writes. A statically linked binary (`CGO_ENABLED=0`) is required by the static runtime image.
+Configuration generation uses two spaces and a final newline; historic compact
+snapshot hashing remains unchanged. A semantic no-op neither rewrites nor
+restarts sing-box. Unknown fields and array order are preserved. The Bot no longer
+normalizes every direct user's routes during unrelated saves. Its quota enforcer
+retains Web-owned reject rules (including their method/extension fields). Manual
+pause state is read from the live config rather than replayed from stale SQLite
+state. Automatic quotas own only their narrow logical reject rules.
 
-UUID creation reuses an existing plain VLESS REALITY listener. It never changes its port, TLS handshake, SNI or private key. SNI is shared and read-only in the editor. An authentication name derived from the UUID remains stable while the display name is edited. For a unified listener ending in its explicit inbound-only reject, creation inserts one precise user binding before that final reject, preserving earlier restrictions. Original mode uses that listener's configured default route. Other listeners retain existing route precedence and reject ambiguous overrides.
+Successful Bot saves re-read the merged production configuration. Inotify refreshes
+open read-only Bot user/traffic panels after other manager writes, without changing
+unsaved edit snapshots. The existing Agent inventory feed refreshes Web state.
+There are no competing background configuration-copy loops. Edit snapshots expire
+safely when evicted or after a controller restart.
 
-Changing an outbound supports a preexisting actual Direct/relay tag or a supported VLESS, Trojan, Shadowsocks, SOCKS/HTTP or Hysteria 2 link. Unsupported link parameters fail closed. A target's exact added routes and outbound are journaled; restore removes those additions and retains the original policy. Delete requires restoring a tzsing-managed outbound first. Disable adds an exact authenticated reject. Enable removes only a known managed disable rule. Deletion of the final UUID is deliberately refused. Share links can be copied into Shadowrocket and v2rayN; the browser does not claim the external application completed import.
-
-Monthly quota, scheduled expiry, per-user bandwidth remain unavailable. There is no durable complete production UUID meter plus automatic quota executor or expiry scheduler. The UI does not accept or claim enforcement of those settings. Production rule-based traffic observations remain lower bounds; the optional native user meter requires a sing-box build with `with_v2ray_api`. Creating a user extends its statistics allowlist only if that executor is already enabled. No production sing-box binary replacement is needed for these configuration operations.
-
-## Verification
-
-Use the designated private test repository for formal validation, with an isolated subproject, synthetic credentials and temporary databases. Never run fixture mutations against production. `TZSING_TEST_SINGBOX` enables disposable sing-box integration subprocesses; `TZSING_ISOLATED_NETNS=1` is required for the REALITY shared-443 test. The native fourteen-user traffic test additionally requires a binary with `with_v2ray_api`. Restart and health failures are injected only in isolated instances. The optional browser fixture uses `TZSING_BROWSER_STAGE`; its controller hooks never restart host services.
-
-Operational activation may use a temporary production UUID after isolated checks pass. Verify the new UUID and unchanged peer through the normal controller transaction, change and restore that temporary UUID, remove it, and require semantic equality with the original configuration. Keep the recovery image, SQLite online backup, original configuration, controller state and service settings outside the public repository. After final deployment, inspect existing health only; do not rerun broad browser, API or load suites against production.
+Keep RuntimeDirectoryPreserve=yes so a controller restart preserves the mounted
+socket directory. The controller needs AF_NETLINK for probes/firewall operations.
+Only the configuration, state, HAProxy/UFW configuration and named firewall lock
+files are writable in its systemd sandbox. Manual editors must participate in the
+same locking protocol; writable-descriptor detection and final CAS provide an
+additional fail-closed check for uncooperative writers, not a universal OS lock.

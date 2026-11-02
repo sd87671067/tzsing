@@ -24,7 +24,7 @@ func TestScopedChangeRestoreKeepsAuthenticationAndSharedRoutes(t *testing.T) {
 	if string(canonical(base["inbounds"])) != string(canonical(next["inbounds"])) {
 		t.Fatal("inbound auth changed")
 	}
-	if !strings.Contains(string(changed), `"action":"reject"`) {
+	if !strings.Contains(string(canonical(next)), `"action":"reject"`) {
 		t.Fatal("reject removed")
 	}
 	tampered := strings.Replace(string(changed), "synthetic-secret", "other", 1)

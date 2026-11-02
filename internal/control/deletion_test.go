@@ -172,7 +172,7 @@ func TestDeleteInboundConflictsAndReservedNodes(t *testing.T) {
 	}
 }
 func TestDeleteInboundTransactionCASExpiryRollbackAndReadback(t *testing.T) {
-	for _, scenario := range []string{"success", "check", "stale", "expired", "restart", "health", "journal"} {
+	for _, scenario := range []string{"success", "format-only", "check", "stale", "expired", "restart", "health", "journal"} {
 		t.Run(scenario, func(t *testing.T) {
 			raw, id := deletionFixture(t)
 			changed, s, e := ChangeIdentity(raw, "shared", id, map[string]any{"tag": managedTag(identityKey("shared", id)), "type": "direct"}, nil)
@@ -222,8 +222,18 @@ func TestDeleteInboundTransactionCASExpiryRollbackAndReadback(t *testing.T) {
 			}
 			expected := changed
 			expectedJ := canonical(journals)
-			if scenario == "stale" {
+			if scenario == "format-only" {
 				expected = append(changed, ' ')
+				os.WriteFile(path, expected, 0600)
+			}
+			if scenario == "stale" {
+				external := candidateMap(changed)
+				u, e := deletionUser(findInbound(external, "shared"), id)
+				if e != nil {
+					t.Fatal(e)
+				}
+				u["external-edit"] = true
+				expected = configBytes(external)
 				os.WriteFile(path, expected, 0600)
 			}
 			if scenario == "journal" {
@@ -237,7 +247,7 @@ func TestDeleteInboundTransactionCASExpiryRollbackAndReadback(t *testing.T) {
 			w = call("/apply", map[string]any{"tag": "shared", "auth_id": id, "plan": token})
 			after, _ := os.ReadFile(path)
 			afterJ, _ := os.ReadFile(journalPath)
-			if scenario == "success" {
+			if scenario == "success" || scenario == "format-only" {
 				if w.Code != 200 || activations != 1 {
 					t.Fatal("delete must apply exactly once", w.Code, activations, w.Body.String())
 				}

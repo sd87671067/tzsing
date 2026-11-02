@@ -88,7 +88,7 @@ func changeIdentity(raw []byte, tag, id string, out map[string]any, prior *Snaps
 	if !existing {
 		c["outbounds"] = append(array(c["outbounds"]), out)
 	}
-	candidate := canonical(c)
+	candidate := configBytes(c)
 	restored, e := RestoreIdentity(candidate, tag, id, s)
 	if e != nil || !reflect.DeepEqual(canonicalJSON(raw), canonicalJSON(restored)) {
 		return nil, Snapshot{}, ErrScope
@@ -115,7 +115,7 @@ func RestoreIdentity(raw []byte, tag, id string, s Snapshot) ([]byte, error) {
 	}
 	c = candidateMap(restored)
 	findInbound(c, identityKey(tag, id))["tag"] = originalTag
-	return canonical(c), nil
+	return configBytes(c), nil
 }
 
 // IdentityMutation preserves credentials and other UUIDs. Disabled identities
@@ -132,7 +132,8 @@ func IdentityMutation(raw []byte, tag, id, action string) ([]byte, error) {
 	kept := []any{}
 	found := false
 	for _, v := range rules {
-		if reflect.DeepEqual(v, reject) {
+		plain := map[string]any{"inbound": reject["inbound"], "auth_user": reject["auth_user"], "action": "reject"}
+		if reflect.DeepEqual(v, reject) || reflect.DeepEqual(v, plain) {
 			found = true
 			continue
 		}
@@ -156,7 +157,7 @@ func IdentityMutation(raw []byte, tag, id, action string) ([]byte, error) {
 	}
 	route["rules"] = kept
 	c["route"] = route
-	return canonical(c), nil
+	return configBytes(c), nil
 }
 
 func impact(config map[string]any, tag, id string) map[string]any {

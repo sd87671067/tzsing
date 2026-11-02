@@ -26,7 +26,7 @@ func TestUUIDCandidateOneListenerAndSecurityPolicies(t *testing.T) {
 	}
 	config := candidateMap(raw)
 	in := findInbound(config, "shared")
-	if len(array(config["inbounds"])) != 1 || len(array(in["users"])) != 12 || in["listen_port"] != float64(443) {
+	if len(array(config["inbounds"])) != 1 || len(array(in["users"])) != 12 || integerPort(in["listen_port"]) != 443 {
 		t.Fatal("shared listener changed")
 	}
 	old := findInbound(candidateMap(original), "shared")

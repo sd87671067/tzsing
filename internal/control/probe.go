@@ -38,7 +38,7 @@ func pinPublic(o map[string]any) (map[string]any, error) {
 		pinned[k] = v
 	}
 	if tls := object(pinned["tls"]); tls["enabled"] == true && text(tls["server_name"]) == "" && net.ParseIP(text(o["server"])) == nil {
-		tls = object(candidateMap(canonical(o))["tls"])
+		tls = object(candidateMap(documentBytes(o))["tls"])
 		tls["server_name"] = o["server"]
 		pinned["tls"] = tls
 	}
@@ -79,7 +79,7 @@ func (c *Controller) probe(o map[string]any) error {
 }
 
 func (c *Controller) probeClient(o map[string]any) error {
-	out := candidateMap(canonical(o))
+	out := candidateMap(documentBytes(o))
 	out["tag"] = "probe-out"
 	return c.probeGraphClient([]any{out}, "probe-out", nil)
 }

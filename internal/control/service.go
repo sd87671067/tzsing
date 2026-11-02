@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,31 +38,44 @@ type ServiceConfig struct {
 	Endpoints      map[string]Endpoint `json:"endpoints"`
 }
 type plan struct {
-	Policy         *policy.Limit
-	Hash, Tag      string
-	AuthID, Action string
-	JournalHash    string
-	Candidate      []byte
-	Snapshot       Snapshot
-	Restore        bool
-	Expires        time.Time
+	Policy                            *policy.Limit
+	Hash, Tag                         string
+	AuthID, Action                    string
+	JournalHash                       string
+	VerifyTag, VerifyUser, ExpectedIP string
+	HapSNI                            string
+	Base                              []byte
+	Candidate                         []byte
+	Snapshot                          Snapshot
+	Restore                           bool
+	Expires                           time.Time
 }
 type Controller struct {
-	inspectLast  map[string]time.Time
-	inspectExits map[string]observedExit
-	lastIP       string
-	Config       ServiceConfig
-	mu           sync.Mutex
-	plans        map[string]plan
-	Hooks        *ApplyHooks
+	readSnapshots map[string][]byte
+	readOrder     []string
+	inspectLast   map[string]time.Time
+	inspectExits  map[string]observedExit
+	lastIP        string
+	Config        ServiceConfig
+	mu            sync.Mutex
+	plans         map[string]plan
+	Hooks         *ApplyHooks
 }
 type ApplyHooks struct {
-	Check    func([]byte) error
-	Activate func() error
-	Healthy  func(map[string]any) error
-	Probe    func(map[string]any) error
+	HapPath   string
+	HapCheck  func([]byte) error
+	HapReload func() error
+	Check     func([]byte) error
+	Activate  func() error
+	Healthy   func(map[string]any) error
+	Probe     func(map[string]any) error
 }
 type serviceRequest struct {
+	Base         json.RawMessage      `json:"base,omitempty"`
+	Candidate    json.RawMessage      `json:"candidate,omitempty"`
+	Hash         string               `json:"hash,omitempty"`
+	RealitySNI   string               `json:"reality_sni,omitempty"`
+	ExpectedIP   string               `json:"expected_ip,omitempty"`
 	OutboundNode *OutboundNodeRequest `json:"outbound_node,omitempty"`
 	Policy       *policy.Limit        `json:"policy,omitempty"`
 	Outbound     string               `json:"outbound,omitempty"`
@@ -78,10 +93,13 @@ type serviceRequest struct {
 	Label        string               `json:"label"`
 }
 type transaction struct {
-	Hash     string              `json:"hash"`
-	After    string              `json:"after"`
-	Before   []byte              `json:"before"`
-	Journals map[string]Snapshot `json:"journals"`
+	Hash      string              `json:"hash"`
+	After     string              `json:"after"`
+	Before    []byte              `json:"before"`
+	FWAdded   []string            `json:"fw_added,omitempty"`
+	HapBefore []byte              `json:"hap_before,omitempty"`
+	HapAfter  []byte              `json:"hap_after,omitempty"`
+	Journals  map[string]Snapshot `json:"journals"`
 }
 
 func atomicFile(path string, b []byte, mode os.FileMode) error {
@@ -170,7 +188,7 @@ func (c *Controller) healthy(config map[string]any) error {
 		good := e == nil
 		for _, v := range array(config["inbounds"]) {
 			in := object(v)
-			port, _ := in["listen_port"].(float64)
+			port := integerPort(in["listen_port"])
 			if port == 0 {
 				continue
 			}
@@ -222,8 +240,25 @@ func (c *Controller) apply(p plan) error {
 		return errors.New("审计日志不可写；未应用")
 	}
 	raw, e := os.ReadFile(c.Config.Config)
-	if e != nil || digest(raw) != p.Hash {
-		return ErrScope
+	if e != nil {
+		return e
+	}
+	if digest(raw) != p.Hash {
+		if len(p.Base) == 0 || digest(p.Base) != p.Hash {
+			return ErrScope
+		}
+		merged, err := mergeConfig(p.Base, p.Candidate, raw)
+		if err != nil {
+			return err
+		}
+		p.Candidate = merged
+		p.Hash = digest(raw)
+		if p.Snapshot.Outbound != nil {
+			p.Snapshot.BaselineHash = snapshotBaseline(candidateMap(merged), p.Snapshot)
+		}
+	}
+	if p.Action == "sbbot" && reflect.DeepEqual(preciseJSON(raw), preciseJSON(p.Candidate)) && p.HapSNI == "" {
+		return nil
 	}
 	if !p.Restore && p.Action == "" && c.Hooks == nil && !p.Snapshot.ExistingOutbound && text(p.Snapshot.Outbound["type"]) != "direct" {
 		pinned, err := pinPublic(p.Snapshot.Outbound)
@@ -243,8 +278,17 @@ func (c *Controller) apply(p plan) error {
 			return ErrScope
 		}
 		candidate["outbounds"] = outs
-		p.Candidate = canonical(candidate)
+		p.Candidate = configBytes(candidate)
 		p.Snapshot.Outbound = pinned
+	}
+	// Format before validation, transaction hashes and atomic writes. The original
+	// remains byte-for-byte intact for CAS, backups and rollback/recovery.
+	if !json.Valid(raw) {
+		return errors.New("配置必须为严格 JSON；JSONC 注释不支持，原文件未修改")
+	}
+	p.Candidate, e = formatConfig(p.Candidate)
+	if e != nil {
+		return e
 	}
 	if c.Hooks == nil && p.Action == "" && !supportsNode(findInbound(candidateMap(p.Candidate), p.Tag)) {
 		return errors.New("目标入站尚未完成实际路径校验，禁止应用")
@@ -259,8 +303,8 @@ func (c *Controller) apply(p plan) error {
 		return e
 	}
 	var candidate, original map[string]any
-	json.Unmarshal(p.Candidate, &candidate)
-	json.Unmarshal(raw, &original)
+	decodeConfigMap(p.Candidate, &candidate)
+	decodeConfigMap(raw, &original)
 	if !p.Restore && p.Action == "" {
 		if e = c.probe(p.Snapshot.Outbound); e != nil {
 			return e
@@ -277,7 +321,15 @@ func (c *Controller) apply(p plan) error {
 	for k, v := range journals {
 		oldJournals[k] = v
 	}
-	before := transaction{Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
+	hapBefore, hapAfter, e := c.haproxyCandidate(p.HapSNI)
+	if e != nil {
+		return e
+	}
+	fwAdded, e := c.firewallAdditions(p.Action, original, candidate)
+	if e != nil {
+		return e
+	}
+	before := transaction{FWAdded: fwAdded, HapBefore: hapBefore, HapAfter: hapAfter, Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
 	backup := filepath.Join(c.Config.State, "backup-"+time.Now().UTC().Format("20060102T150405.000000000")+"-"+before.Hash[:12]+".json")
 	if e = atomicFile(backup, raw, 0600); e != nil {
 		return e
@@ -305,7 +357,7 @@ func (c *Controller) apply(p plan) error {
 			c.audit("rollback_conflict_manual_recovery_required", p.Tag)
 			return errors.New("外部配置发生并发变更；已保留备份，需人工恢复")
 		}
-		if atomicFile(c.Config.Config, raw, stat.Mode().Perm()) != nil || c.activate() != nil || c.healthy(original) != nil {
+		if c.rollbackFirewall(fwAdded) != nil || c.restoreHaproxy(hapAfter, hapBefore) != nil || atomicFile(c.Config.Config, raw, stat.Mode().Perm()) != nil || c.activate() != nil || c.healthy(original) != nil {
 			c.audit("rollback_failed_manual_recovery_required", p.Tag)
 			return errors.New("回滚验证失败；需人工恢复")
 		}
@@ -315,6 +367,12 @@ func (c *Controller) apply(p plan) error {
 		os.Remove(txPath)
 		c.audit("rolled_back", p.Tag)
 		return fmt.Errorf("%s；已恢复原配置并验证服务", cause.Error())
+	}
+	if e = c.openFirewall(fwAdded); e != nil {
+		return rollback(e)
+	}
+	if e = c.restoreHaproxy(hapBefore, hapAfter); e != nil {
+		return rollback(e)
 	}
 	if e = c.activate(); e != nil {
 		return rollback(errors.New("服务切换失败"))
@@ -348,6 +406,11 @@ func (c *Controller) apply(p plan) error {
 		in["users"] = users
 		if e = c.probeNode(peers, p.Tag); e != nil {
 			return rollback(errors.New("其他 UUID 健康检查失败"))
+		}
+	}
+	if p.VerifyTag != "" {
+		if e = c.verifyIdentity(candidate, p.VerifyTag, p.VerifyUser, p.ExpectedIP); e != nil {
+			return rollback(e)
 		}
 	}
 	expectedExit := c.lastIP
@@ -437,8 +500,12 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(405, "操作不支持")
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/sbbot-") && c.Hooks == nil && r.Context().Value(rootPeerKey{}) != true {
+		fail(403, "仅允许本机 Bot 控制身份")
+		return
+	}
 	var v serviceRequest
-	d := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
+	d := json.NewDecoder(io.LimitReader(r.Body, 9<<20))
 	d.DisallowUnknownFields()
 	if d.Decode(&v) != nil {
 		fail(400, "请求无效")
@@ -449,7 +516,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(400, "请求无效")
 		return
 	}
-	if v.AuthID != "" && r.URL.Path != "/policy-preview" && r.URL.Path != "/policy-apply" && r.URL.Path != "/status" && r.URL.Path != "/share" && r.URL.Path != "/diagnostics" && r.URL.Path != "/intel" && r.URL.Path != "/preview" && r.URL.Path != "/restore-preview" && r.URL.Path != "/apply" {
+	if !strings.HasPrefix(r.URL.Path, "/sbbot-") && v.AuthID != "" && r.URL.Path != "/policy-preview" && r.URL.Path != "/policy-apply" && r.URL.Path != "/status" && r.URL.Path != "/share" && r.URL.Path != "/diagnostics" && r.URL.Path != "/intel" && r.URL.Path != "/preview" && r.URL.Path != "/restore-preview" && r.URL.Path != "/apply" {
 		fail(403, "认证身份的独立路由或检测尚不可用")
 		return
 	}
@@ -477,9 +544,19 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	raw, e := os.ReadFile(c.Config.Config)
 	var config map[string]any
-	if e != nil || len(raw) > 4<<20 || json.Unmarshal(raw, &config) != nil {
+	if e != nil || len(raw) > 4<<20 || decodeConfigMap(raw, &config) != nil {
 		fail(503, "配置不可用")
 		return
+	}
+	c.rememberRead(raw)
+	if v.Hash != "" && (r.URL.Path == "/preview" || r.URL.Path == "/restore-preview" || r.URL.Path == "/outbound-preview") {
+		base, ok := c.readSnapshots[v.Hash]
+		if !ok {
+			fail(409, "编辑版本已过期，请刷新")
+			return
+		}
+		raw = append([]byte(nil), base...)
+		config = candidateMap(raw)
 	}
 	writeEnabled := c.Config.WriteEnabled
 	writerReason := c.Config.DisabledReason
@@ -488,6 +565,10 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeEnabled = false
 			writerReason = e.Error()
 		}
+	}
+	if strings.HasPrefix(r.URL.Path, "/sbbot-") {
+		c.sbbotRequest(w, r, v, raw, writeEnabled)
+		return
 	}
 	if r.URL.Path == "/outbound-catalog" || r.URL.Path == "/outbound-preview" || r.URL.Path == "/outbound-apply" || r.URL.Path == "/outbound-test" {
 		c.outboundNodes(w, r, v, raw, writeEnabled)
@@ -554,7 +635,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := auth.Random()
 		authID := text(summary["auth_id"])
 		delete(summary, "auth_id")
-		c.plans[auth.Digest(id)] = plan{Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Policy: &policy.Limit{Quota: v.Node.Quota, ExpiresAt: v.Node.ExpiresAt, BillingDay: v.Node.BillingDay, Timezone: v.Node.Timezone}, Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
+		c.plans[auth.Digest(id)] = plan{Base: append([]byte(nil), raw...), Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Policy: &policy.Limit{Quota: v.Node.Quota, ExpiresAt: v.Node.ExpiresAt, BillingDay: v.Node.BillingDay, Timezone: v.Node.Timezone}, Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
 		summary["plan"] = id
 		summary["writable"] = writeEnabled
 		summary["effects"] = impact(config, v.Node.Inbound, "")
@@ -624,7 +705,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var user map[string]any
 			user, e = deletionUser(in, v.AuthID)
 			if e == nil {
-				scoped := candidateMap(canonical(in))
+				scoped := candidateMap(documentBytes(in))
 				scoped["users"] = []any{user}
 				in = scoped
 			}
@@ -645,7 +726,12 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(503, "恢复快照不可用")
 		return
 	}
-	respond := func(x any) { json.NewEncoder(w).Encode(x) }
+	respond := func(x any) {
+		if m, ok := x.(map[string]any); ok {
+			m["edit_version"] = digest(raw)
+		}
+		json.NewEncoder(w).Encode(x)
+	}
 	switch r.URL.Path {
 	case "/status":
 		reason := "配置应用需要重启 sing-box，所有现有连接会短暂断开并重连"
@@ -698,7 +784,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(429, "操作过于频繁")
 			return
 		}
-		p := plan{Hash: digest(raw), Tag: v.Tag, AuthID: v.AuthID, Action: v.Action, Expires: time.Now().Add(2 * time.Minute)}
+		p := plan{Base: append([]byte(nil), raw...), Hash: digest(raw), Tag: v.Tag, AuthID: v.AuthID, Action: v.Action, Expires: time.Now().Add(2 * time.Minute)}
 		var preview any
 		if r.URL.Path == "/restore-preview" {
 			s, ok := journals[journalKey]
@@ -718,7 +804,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				fail(403, "必须指定单个 UUID")
 				return
 			}
-			if v.Action == "enable" && journals[journalKey+":disabled"].BaselineHash != baselineHash(config) {
+			if paused, ok := journals[journalKey+":disabled"]; v.Action == "enable" && ok && paused.BaselineHash != baselineHash(config) {
 				fail(409, "停用规则来源或配置版本已变化，不能安全启用")
 				return
 			}
@@ -739,7 +825,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					current := object(item)
 					kind, _ := model.OutboundType(text(current["type"]))
 					if text(current["tag"]) == v.Outbound && (kind == "actual" || text(current["type"]) == "selector" || text(current["type"]) == "urltest") {
-						o = candidateMap(canonical(current))
+						o = candidateMap(documentBytes(current))
 						if v.AuthID == "" {
 							o["tag"] = managedTag(journalKey)
 						}
@@ -849,7 +935,7 @@ func RunController(ctx context.Context, path string) error {
 		}
 		var original map[string]any
 		json.Unmarshal(tx.Before, &original)
-		if c.check(tx.Before) != nil || atomicFile(cfg.Config, tx.Before, 0600) != nil || c.activate() != nil || c.healthy(original) != nil {
+		if c.rollbackFirewall(tx.FWAdded) != nil || c.restoreHaproxy(tx.HapAfter, tx.HapBefore) != nil || c.check(tx.Before) != nil || atomicFile(cfg.Config, tx.Before, 0600) != nil || c.activate() != nil || c.healthy(original) != nil {
 			return errors.New("中断事务恢复失败")
 		}
 		if atomicFile(filepath.Join(cfg.State, "snapshots.json"), canonical(tx.Journals), 0600) != nil {
@@ -878,17 +964,19 @@ func RunController(ctx context.Context, path string) error {
 	server := &http.Server{Handler: c, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 180 * time.Second, IdleTimeout: 5 * time.Second,
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
 			allowed := false
+			root := false
 			if u, ok := conn.(*net.UnixConn); ok {
 				rc, _ := u.SyscallConn()
 				rc.Control(func(fd uintptr) {
 					cred, e := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
 					allowed = e == nil && (cred.Uid == cfg.PeerUID || cred.Uid == 0)
+					root = e == nil && cred.Uid == 0
 				})
 			}
 			if !allowed {
 				conn.Close()
 			}
-			return ctx
+			return context.WithValue(ctx, rootPeerKey{}, root)
 		}}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ln) }()
@@ -905,11 +993,28 @@ func RunController(ctx context.Context, path string) error {
 	}
 }
 
-func candidateMap(b []byte) map[string]any { var c map[string]any; json.Unmarshal(b, &c); return c }
+func candidateMap(b []byte) map[string]any { var c map[string]any; decodeConfigMap(b, &c); return c }
 
 func planKey(p plan) string {
 	if p.AuthID != "" {
 		return identityKey(p.Tag, p.AuthID)
 	}
 	return p.Tag
+}
+
+// Called under the process mutex and shared flock. Old edit pages expire safely.
+func (c *Controller) rememberRead(raw []byte) {
+	if c.readSnapshots == nil {
+		c.readSnapshots = map[string][]byte{}
+	}
+	hash := digest(raw)
+	if _, ok := c.readSnapshots[hash]; ok {
+		return
+	}
+	c.readSnapshots[hash] = append([]byte(nil), raw...)
+	c.readOrder = append(c.readOrder, hash)
+	if len(c.readOrder) > 128 {
+		delete(c.readSnapshots, c.readOrder[0])
+		c.readOrder = c.readOrder[1:]
+	}
 }

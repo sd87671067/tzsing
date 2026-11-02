@@ -12,7 +12,7 @@ import (
 var ErrScope = errors.New("配置依赖、目标范围或原始快照冲突；未应用")
 
 func digest(b []byte) string       { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-func canonical(v any) []byte       { b, _ := json.Marshal(v); return b }
+func canonical(v any) []byte       { b, _ := json.Marshal(historicNumbers(v)); return b }
 func managedTag(tag string) string { return "tzsing-" + digest([]byte(tag))[:24] }
 func findInbound(c map[string]any, tag string) map[string]any {
 	for _, v := range array(c["inbounds"]) {
@@ -40,7 +40,7 @@ type Snapshot struct {
 // never edited. Restoration removes these exact additions, not a guessed direct.
 func Change(raw []byte, tag string, outbound map[string]any, prior *Snapshot) ([]byte, Snapshot, error) {
 	var c map[string]any
-	if json.Unmarshal(raw, &c) != nil {
+	if decodeConfigMap(raw, &c) != nil {
 		return nil, Snapshot{}, ErrScope
 	}
 	in := findInbound(c, tag)
@@ -54,7 +54,7 @@ func Change(raw []byte, tag string, outbound map[string]any, prior *Snapshot) ([
 		}
 		raw = base
 		c = nil
-		json.Unmarshal(raw, &c)
+		decodeConfigMap(raw, &c)
 	}
 	if object(in)["type"] == "socks" || object(in)["type"] == "mixed" || object(in)["type"] == "http" {
 		return nil, Snapshot{}, ErrScope
@@ -99,7 +99,7 @@ func Change(raw []byte, tag string, outbound map[string]any, prior *Snapshot) ([
 	route["rules"] = rules
 	c["route"] = route
 	c["outbounds"] = append(array(c["outbounds"]), outbound)
-	candidate := canonical(c)
+	candidate := configBytes(c)
 	restored, e := Restore(candidate, tag, snapshot)
 	if e != nil || !reflect.DeepEqual(canonicalJSON(raw), canonicalJSON(restored)) {
 		return nil, Snapshot{}, ErrScope
@@ -109,7 +109,7 @@ func Change(raw []byte, tag string, outbound map[string]any, prior *Snapshot) ([
 func canonicalJSON(b []byte) any { var v any; json.Unmarshal(b, &v); return v }
 func Restore(raw []byte, tag string, s Snapshot) ([]byte, error) {
 	var c map[string]any
-	if json.Unmarshal(raw, &c) != nil || digest(canonical(findInbound(c, tag))) != s.InboundHash || snapshotBaseline(c, s) != s.BaselineHash {
+	if decodeConfigMap(raw, &c) != nil || digest(canonical(findInbound(c, tag))) != s.InboundHash || snapshotBaseline(c, s) != s.BaselineHash {
 		return nil, ErrScope
 	}
 	route := object(c["route"])
@@ -158,7 +158,7 @@ func Restore(raw []byte, tag string, s Snapshot) ([]byte, error) {
 		c["route"] = route
 	}
 	c["outbounds"] = outs
-	return canonical(c), nil
+	return configBytes(c), nil
 }
 
 func baselineHash(c map[string]any) string {
@@ -191,7 +191,7 @@ func snapshotBaseline(config map[string]any, s Snapshot) string {
 	if !s.ExistingOutbound {
 		return baselineHash(config)
 	}
-	c := candidateMap(canonical(config))
+	c := candidateMap(documentBytes(config))
 	route := object(c["route"])
 	rules := []any{}
 	owned := map[string]int{}

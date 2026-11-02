@@ -97,7 +97,7 @@ func probeGraph(config, root map[string]any, selected map[string]string) ([]any,
 			return errors.New("出站链引用不存在")
 		}
 		visiting[tag] = true
-		copy := candidateMap(canonical(o))
+		copy := candidateMap(documentBytes(o))
 		kind := text(o["type"])
 		if kind == "selector" || kind == "urltest" {
 			member := selected[tag]
@@ -119,7 +119,7 @@ func probeGraph(config, root map[string]any, selected map[string]string) ([]any,
 				if !safeOutbound(copy) && text(copy["detour"]) == "" {
 					return errors.New("出站链包含不支持的本地依赖")
 				}
-				validation := candidateMap(canonical(copy))
+				validation := candidateMap(documentBytes(copy))
 				delete(validation, "detour")
 				if !safeOutbound(validation) {
 					return errors.New("出站链包含不支持的本地依赖")

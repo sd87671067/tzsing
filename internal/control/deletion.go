@@ -164,7 +164,7 @@ func DeleteInbound(raw []byte, tag, id string, journals map[string]Snapshot) ([]
 				return nil, fmt.Errorf("管理路由被外部修改或重复，无法证明归属；未删除")
 			}
 		}
-		if !s.ExistingOutbound && !reflect.DeepEqual(findOutbound(c, text(s.Outbound["tag"])), s.Outbound) {
+		if !s.ExistingOutbound && string(canonical(findOutbound(c, text(s.Outbound["tag"])))) != string(canonical(s.Outbound)) {
 			return nil, fmt.Errorf("专属出站被外部修改；未删除")
 		}
 	}
@@ -244,5 +244,5 @@ func DeleteInbound(raw []byte, tag, id string, journals map[string]Snapshot) ([]
 			stats["users"] = names
 		}
 	}
-	return canonical(c), nil
+	return configBytes(c), nil
 }
