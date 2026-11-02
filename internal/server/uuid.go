@@ -28,6 +28,7 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 		out, status := a.hostControl(r.Context(), "uuid-catalog", map[string]string{})
 		if status == 200 {
 			out["server_id"] = a.ControlServer
+			a.nameOutboundChoices(out["outbounds"])
 		}
 		reply(w, status, out)
 		return

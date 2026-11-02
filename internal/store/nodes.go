@@ -158,6 +158,23 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 		t.NeedsName = global == "" && configName == ""
 	}
 	if t.Identity == "inbound" {
+		// These paths belong to an already-authorized inbound. Display labels
+		// are independent of raw-tag disclosure and never authorize a route.
+		t.EgressName = ""
+		if t.Egress != "" {
+			t.EgressName = s.OutboundDisplayName(server, t.Egress)
+		}
+		for i := range t.Egresses {
+			t.Egresses[i].Name = s.OutboundDisplayName(server, t.Egresses[i].Tag)
+		}
+		if !show && t.EgressName == t.Egress {
+			t.EgressName = ""
+		}
+		for i := range t.Egresses {
+			if !show && t.Egresses[i].Name == t.Egresses[i].Tag {
+				t.Egresses[i].Name = ""
+			}
+		}
 		if !show {
 			t.InboundTag = ""
 			t.Egress = ""
@@ -258,8 +275,13 @@ func (s *Store) Present(u User, server string, t *model.Tag) error {
 	}
 	t.ShowExpiry = s.Setting("show_expiry", 0) == 1
 	t.ShowQuota = s.Setting("show_quota", 1) == 1
-	if !t.ShowExpiry { t.ExpiresAt = 0 }
-	if !t.ShowQuota { t.Quota = 0; t.BillableUsed = nil }
+	if !t.ShowExpiry {
+		t.ExpiresAt = 0
+	}
+	if !t.ShowQuota {
+		t.Quota = 0
+		t.BillableUsed = nil
+	}
 	return nil
 }
 

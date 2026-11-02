@@ -35,8 +35,10 @@ func TestAdminBrowserStage(t *testing.T) {
 		switch r.URL.Path {
 		case "/outbound-catalog":
 			io.WriteString(w, `{"items":[{"tag":"relay","protocol":"http","references":[]}],"mappings":{"`+model.IdentityName("shared", model.UUIDAuthID("11111111-1111-4111-8111-111111111111"))+`":["relay"]}}`)
+		case "/uuid-catalog":
+			io.WriteString(w, `{"inbounds":[{"tag":"shared","port":443,"users":2}],"outbounds":[{"tag":"relay","type":"http"}],"capabilities":{}}`)
 		case "/status":
-			io.WriteString(w, `{"share":true,"apply":true,"restore":true,"preview":true,"profiles":[{"id":"single","label":"当前 UUID"}],"reason":"隔离 UI 夹具"}`)
+			io.WriteString(w, `{"share":true,"apply":true,"restore":true,"preview":true,"outbounds":[{"tag":"relay","type":"http"}],"profiles":[{"id":"single","label":"当前 UUID"}],"reason":"隔离 UI 夹具"}`)
 		case "/share":
 			io.WriteString(w, `{"link":"vless://11111111-1111-4111-8111-111111111111@example.org:443?security=reality&pbk=public"}`)
 		case "/intel":

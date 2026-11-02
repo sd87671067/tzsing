@@ -77,7 +77,7 @@ func (a *App) selectableOutbounds(ctx context.Context, u store.User, node string
 		if o.Owner != u.ID && !allowed[tag] {
 			continue
 		}
-		choice := outboundChoice{ID: o.ID, Name: o.Name, Current: current[tag]}
+		choice := outboundChoice{ID: o.ID, Name: a.DB.OutboundDisplayName(server, tag), Current: current[tag]}
 		result = append(result, choice)
 	}
 	return result, nil

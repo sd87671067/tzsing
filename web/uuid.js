@@ -25,7 +25,7 @@ const UUIDEditor=(()=>{
    const routing=group('出站路由'),mode=UI.make('div','source-tabs');mode.setAttribute('role','group');mode.setAttribute('aria-label','出站方式');routing.append(mode);let selected='original';
    const outbound=add(routing,'outbound','实际出站 Tag（候选）','select'),buttons=[];
    for(const [value,label]of [['original','原路由'],['direct','直连'],['relay','中转']]){
-    const b=UI.make('button','',label);b.type='button';b.onclick=()=>{selected=value;buttons.forEach(x=>x.b.setAttribute('aria-pressed',String(x.value===value)));outbound.replaceChildren();if(value==='original')outbound.add(new Option('沿用原路由',''));else for(const o of c.outbounds.filter(o=>(o.type==='direct')===(value==='direct')))outbound.add(new Option(o.tag+' · '+o.type,o.tag));outbound.required=value!=='original'};buttons.push({value,b});mode.append(b);
+    const b=UI.make('button','',label);b.type='button';b.onclick=()=>{selected=value;buttons.forEach(x=>x.b.setAttribute('aria-pressed',String(x.value===value)));outbound.replaceChildren();if(value==='original')outbound.add(new Option('沿用原路由',''));else for(const o of c.outbounds.filter(o=>(o.type==='direct')===(value==='direct')))outbound.add(outboundOption(o,' · '+o.type));outbound.required=value!=='original'};buttons.push({value,b});mode.append(b);
    }
    buttons[0].b.click();capability(routing,'outbound','独立出站应用');
    const limits=PolicyFields.create(f,{},c.capabilities?.quota?.state==='ready'&&c.capabilities?.expires_at?.state==='ready');

@@ -17,12 +17,12 @@ const NodeInspect=(()=>{
    }else text(dd,value);
   });
  }
- function selected(r){const p=r?.t.egresses?.[pathIndex];return p?{...r,t:{...r.t,egress:p.tag,ip:p.ip,category:p.type==='direct'?'直连':'中转'}}:r}
+ function selected(r){const p=r?.t.egresses?.[pathIndex];return p?{...r,t:{...r.t,egress:p.tag,egress_name:p.name,ip:p.ip,category:p.type==='direct'?'直连':'中转'}}:r}
  function render(r){
   if(!current||current!==r.t.id)return;
   const select=$('#detail-path');if(select){
    const ps=r.t.egresses||[];select.hidden=ps.length<2;
-   if(select.options.length!==ps.length||[...select.options].some((o,i)=>o.textContent!==(ps[i].tag||'出口 '+(i+1))))select.replaceChildren(...ps.map((p,i)=>new Option(p.tag||'出口 '+(i+1),i)));
+   if(select.options.length!==ps.length||[...select.options].some((o,i)=>o.textContent!==(ps[i].name||ps[i].tag||'出口 '+(i+1))))select.replaceChildren(...ps.map((p,i)=>new Option(p.name||p.tag||'出口 '+(i+1),i)));
    select.disabled=checking;select.value=String(pathIndex);
   }
   r=selected(r);
@@ -33,7 +33,7 @@ const NodeInspect=(()=>{
   const ips=result?.route===r.t.route_version&&result.pathIndex===pathIndex?result.network:null;
   const ipv4=ips?.ipv4?.ip||ip.ipv4,ipv6=ips?.ipv6?.ip||ip.ipv6;
   fill($('#detail-ip'),[
-   ['IPv4',ipv4||'待检测'],['IPv6',ipv6],['当前出站',r.t.egress||(['当前路径未知','路径待检测'].includes(r.t.category)?'路径待检测':'关联出口（Tag 未公开）')],
+   ['IPv4',ipv4||'待检测'],['IPv6',ipv6],['当前出站',r.t.egress_name||r.t.egress||(['当前路径未知','路径待检测'].includes(r.t.category)?'路径待检测':'关联出口（Tag 未公开）')],
    ['出口类型',r.t.egress?r.t.category:''],['国家 / 地区',countryName(data)],['城市',data.city],['ASN',data.asn],['运营商',data.org],['ISP',optional(data.isp)],['IP 类型',ipType],
    ...(source==='ippure'?[['是否原生 IP',yesNo(data.native)]]:[]),
    ['风险评分',data.risk_score==null?'':data.risk_score+' / 100'],['检测时间',ip.updated?when(ip.updated):''],['状态',result?.failed||ip.error?'最近检测缓存':!ipv4&&!ipv6?'路径待检测':'']

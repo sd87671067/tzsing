@@ -153,6 +153,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	if path == "status" {
 		out, status := a.hostControl(r.Context(), "status", payload)
 		if status == 200 {
+			if fresh.Role == "admin" {
+				a.nameOutboundChoices(out["outbounds"])
+			}
 			if fresh.Role != "admin" && actions["change"] {
 				items, err := a.selectableOutbounds(r.Context(), fresh, v.Node)
 				if err != nil {
@@ -304,4 +307,16 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	}
 	a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), fresh.Name, "local", "control_"+path+"_"+event+":"+v.Node)
 	reply(w, status, out)
+}
+
+// Only call after the caller's existing authorization filter has run.
+func (a *App) nameOutboundChoices(value any) {
+	items, _ := value.([]any)
+	for _, entry := range items {
+		if item, ok := entry.(map[string]any); ok {
+			if tag, ok := item["tag"].(string); ok {
+				item["name"] = a.DB.OutboundDisplayName(a.ControlServer, tag)
+			}
+		}
+	}
 }

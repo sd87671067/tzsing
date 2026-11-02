@@ -29,12 +29,8 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 					if !ok {
 						continue
 					}
-					var name string
-					a.DB.QueryRow("SELECT name FROM nodes WHERE server=? AND tag=?", a.ControlServer, o["tag"]).Scan(&name)
-					if name == "" {
-						name, _ = o["tag"].(string)
-					}
-					o["name"] = name
+					tag, _ := o["tag"].(string)
+					o["name"] = a.DB.OutboundDisplayName(a.ControlServer, tag)
 				}
 			}
 		}
@@ -61,7 +57,7 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 	}
 	if v.Action == "rename" {
 		v.Name = strings.TrimSpace(v.Name)
-		if v.Name == "" || !validTag(v.Name) {
+		if v.Name != "" && !validTag(v.Name) {
 			fail(w, 422)
 			return
 		}
@@ -91,6 +87,9 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		defer tx.Rollback()
 		_, e = tx.Exec("INSERT INTO nodes(id,server,tag,name) VALUES(?,?,?,?) ON CONFLICT(server,tag) DO UPDATE SET name=excluded.name", auth.Random(), a.ControlServer, v.Node.Tag, v.Name)
 		if e == nil {
+			_, e = tx.Exec("UPDATE outbound_registry SET name=? WHERE server=? AND tag=?", v.Name, a.ControlServer, v.Node.Tag)
+		}
+		if e == nil {
 			_, e = tx.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "outbound_rename")
 		}
 		if e == nil {
@@ -100,7 +99,6 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 			fail(w, 500)
 			return
 		}
-		a.DB.Exec("UPDATE outbound_registry SET name=? WHERE server=? AND tag=?", v.Name, a.ControlServer, v.Node.Tag)
 		reply(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -132,7 +130,7 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 					out["warning"] = "出站已删除，显示名称清理失败"
 				}
 			} else if tag != "" {
-				_, e = a.DB.Exec("INSERT INTO nodes(id,server,tag,name) VALUES(?,?,?,?) ON CONFLICT(server,tag) DO UPDATE SET name=excluded.name", auth.Random(), a.ControlServer, tag, n.Node)
+				e = a.DB.SetOutboundDisplayName(a.ControlServer, tag, n.Node)
 				if e != nil {
 					out["warning"] = "出站已生效，显示名称保存失败"
 				}
@@ -147,7 +145,7 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		return
 	}
 	v.Name = strings.TrimSpace(v.Name)
-	if v.Action == "save" && (v.Name == "" || !validTag(v.Name)) {
+	if v.Action == "save" && v.Name != "" && !validTag(v.Name) {
 		reply(w, 422, map[string]string{"error": "请输入有效显示名称"})
 		return
 	}

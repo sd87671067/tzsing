@@ -37,6 +37,7 @@ func (a *App) syncOutbounds(ctx context.Context) ([]store.Outbound, error) {
 		if e != nil {
 			return nil, e
 		}
+		o.Name = a.DB.OutboundDisplayName(a.ControlServer, tag)
 		items = append(items, o)
 	}
 	return items, nil
@@ -144,7 +145,9 @@ func (a *App) personalOutbounds(w http.ResponseWriter, r *http.Request, u store.
 		out, status := a.hostControl(r.Context(), "outbound-apply", map[string]string{"plan": n.Plan})
 		delete(out, "tag")
 		if status == 200 && action == "edit" {
-			a.DB.Exec("UPDATE outbound_registry SET name=? WHERE id=?", n.Label, o.ID)
+			if err := a.DB.SetOutboundDisplayName(server, o.Tag, n.Label); err != nil {
+				out["warning"] = "出站已生效，显示名称保存失败"
+			}
 		}
 		if status == 200 && action == "delete" {
 			a.DB.Exec("DELETE FROM outbound_registry WHERE id=?", o.ID)

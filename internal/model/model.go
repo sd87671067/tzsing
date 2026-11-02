@@ -1,6 +1,7 @@
 package model
 
 type EgressPath struct {
+	Name string `json:"name,omitempty"`
 	Tag  string `json:"tag,omitempty"`
 	Type string `json:"type"`
 	IP   *Exit  `json:"ip,omitempty"`
@@ -21,6 +22,7 @@ type Tag struct {
 	AuthScheme       string       `json:"auth_scheme,omitempty"`
 	AuthID           string       `json:"auth_id,omitempty"`
 	Accounting       string       `json:"accounting,omitempty"`
+	EgressName       string       `json:"egress_name,omitempty"`
 	EgressType       string       `json:"egress_type,omitempty"`
 	GrantTag         string       `json:"grant_tag,omitempty"`
 	RouteVersion     string       `json:"route_version,omitempty"`
