@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -176,6 +177,8 @@ func (c *Controller) policyRequest(w http.ResponseWriter, r *http.Request, v ser
 		return
 	}
 	if e = l.Set(v.Tag, name, *p.Policy); e != nil {
+		log.Printf("policy transaction failed node_hash=%s: %v", digest([]byte(identityKey(v.Tag, v.AuthID)))[:16], e)
+		c.audit("policy_apply_failed", identityKey(v.Tag, v.AuthID))
 		fail(503, "策略事务未提交，原策略保留")
 		return
 	}

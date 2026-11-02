@@ -49,9 +49,9 @@ const NodeControl=(()=>{
   const r=rows.get(id);if(!r)return;let value=r.t,ready=false,reason="";try{const p=await api('node-policy?'+new URLSearchParams({node_id:id}));value=p.policy;ready=p.ready}catch(e){reason=e.message};const f=node('form','control-body'),fields=PolicyFields.create(f,value,ready),state=node('p','notice',reason||('当前状态：'+policyLabel(value.status||r.t.policy_state))),save=node('button','primary','保存策略');
   save.disabled=!ready;f.append(state,save);let live=true;const m=UI.modal('额度与有效期',f,{trigger,onClose:()=>live=false});editor=m;
   f.onsubmit=async e=>{e.preventDefault();if(save.disabled||!f.reportValidity())return;save.disabled=true;
-   try{const values=fields.read(),p=await api('node-policy','POST',{node_id:id,action:'preview',policy:values});if(!live)return;
-    if(!await UI.confirm('确认更新此 UUID 的策略',r.t.name+'\n月额度：'+(values.quota?bytes(values.quota):'不限')+'\n到期：'+(values.expires_at?when(values.expires_at)+' · '+fields.zone:'未设置')+'\n重置：每月 '+values.billing_day+' 日 · '+values.timezone+'\n无需重启 sing-box，其他 UUID 保持当前策略。','确认保存'))return;
-    await api('node-policy','POST',{node_id:id,action:'apply',nonce:p.nonce});if(live){m.force();update(await api('snapshot'));UI.notify('策略已由数据路径执行')}
+   try{const values=fields.read();let p=await api('node-policy','POST',{node_id:id,action:'preview',policy:values});if(!live)return;
+    if(!await UI.confirm('确认更新此 UUID 的策略',r.t.name+'\n月额度：'+(values.quota?bytes(values.quota):'不限')+'\n到期：'+(values.expires_at?when(values.expires_at)+' · '+fields.zone:'未设置')+'\n重置：每月 '+values.billing_day+' 日 · '+values.timezone+'\n无需重启 sing-box，其他 UUID 保持当前策略。','确认保存',{onConfirm:async()=>{if(!live)throw Error('编辑已关闭，请重新打开');if(!p)p=await api('node-policy','POST',{node_id:id,action:'preview',policy:values});const nonce=p.nonce;p=null;await api('node-policy','POST',{node_id:id,action:'apply',nonce})}}))return;
+    if(live){m.force();UI.notify('策略已由数据路径执行');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('策略已保存；刷新失败：'+e.message,'error')}}
    }catch(err){if(live)UI.notify(err.message,'error')}finally{if(live)save.disabled=false}
   };
  }
@@ -78,13 +78,16 @@ const NodeControl=(()=>{
  }
  async function mutate(id,trigger,action){
   const r=rows.get(id);if(!r||me?.role!=='admin')return;
-  const body=node('form','control-body'),select=node('select'),preview=node('p','notice'),save=node('button','primary','配置预览');
-  for(const [value,label]of action==='delete'?[['delete','删除当前 UUID']]:[['disable','停用当前 UUID'],['enable','启用当前 UUID']])select.add(new Option(label,value));body.append(select,preview,save);
-  let live=true;const m=UI.modal(action==='delete'?'删除节点':'启用 / 停用 UUID',body,{trigger,onClose:()=>live=false});editor=m;
+  const body=node('form','control-body'),select=node('select'),preview=node('p','notice'),save=node('button',action==='delete'?'danger':'primary',action==='delete'?'删除节点':'配置预览'),cancel=node('button','','取消'),actions=node('div','row-actions');
+  for(const [value,label]of action==='delete'?[['delete','删除当前 UUID']]:[['disable','停用当前 UUID'],['enable','启用当前 UUID']])select.add(new Option(label,value));cancel.type='button';actions.append(cancel,save);body.append(select,preview,actions);
+  let live=true;const m=UI.modal(action==='delete'?'删除节点':'启用 / 停用 UUID',body,{trigger,onClose:()=>live=false});editor=m;cancel.onclick=()=>m.close();
   body.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;
-   try{const g=await gate(id);const p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!live)return;text(preview,p.reason||p.impact);if(!p.writable)throw Error(p.reason||'配置写入条件未满足');
-    if(!p.effects)throw Error('缺少影响预览');if(!await UI.confirm('确认应用',confirmationText(r,p.effects,select.selectedOptions[0].text),'确认应用'))return;
-    await api('control/apply','POST',{node_id:id,nonce:p.nonce});if(live){m.force();UI.notify('节点配置已应用')}
+   try{const g=await gate(id);let p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!live)return;text(preview,p.reason||p.impact);if(!p.writable)throw Error(p.reason||'配置写入条件未满足');
+    if(!p.effects)throw Error('缺少影响预览');if(!await UI.confirm(action==='delete'?'确认删除节点':'确认应用',confirmationText(r,p.effects,select.selectedOptions[0].text),action==='delete'?'删除节点':'确认应用',{onConfirm:async()=>{
+     if(!live)throw Error('操作已关闭，请重新预览');if(!p){const g=await gate(id);p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!p.writable||!p.effects)throw Error(p.reason||'缺少影响预览')}
+     const nonce=p.nonce;p=null;await api('control/apply','POST',{node_id:id,nonce});
+    }}))return;
+    if(live){m.force();UI.notify(action==='delete'?'节点已删除':'节点配置已应用');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('操作已生效；刷新失败：'+e.message,'error')}}
    }catch(err){if(live){text(preview,'');UI.notify(err.message,'error')}}finally{if(live)save.disabled=false}
   };
  }
