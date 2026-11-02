@@ -72,11 +72,15 @@ func (c *Controller) sbbotRequest(w http.ResponseWriter, r *http.Request, v serv
 			fail(503, errors.New("生产配置写入不可用"))
 			return
 		}
-		if len(v.Base) == 0 || digest(v.Base) != v.Hash || !json.Valid(v.Candidate) {
+		base := v.BaseBytes
+		if len(base) == 0 {
+			base = v.Base
+		}
+		if len(base) == 0 || digest(base) != v.Hash || !json.Valid(v.Candidate) {
 			fail(409, ErrScope)
 			return
 		}
-		merged, e := mergeConfig(v.Base, v.Candidate, raw)
+		merged, e := mergeConfig(base, v.Candidate, raw)
 		if e != nil {
 			fail(409, e)
 			return

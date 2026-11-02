@@ -71,6 +71,7 @@ type ApplyHooks struct {
 	Probe     func(map[string]any) error
 }
 type serviceRequest struct {
+	BaseBytes    []byte               `json:"base_bytes,omitempty"`
 	Base         json.RawMessage      `json:"base,omitempty"`
 	Candidate    json.RawMessage      `json:"candidate,omitempty"`
 	Hash         string               `json:"hash,omitempty"`

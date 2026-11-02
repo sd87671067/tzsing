@@ -19,6 +19,7 @@ func TestSharedActualBotAndWebUnixSocket(t *testing.T) {
 	}
 	c, path, _ := newSyncController(t)
 	raw := []byte(`{"inbounds":[{"tag":"a","type":"vless"}],"outbounds":[{"type":"direct","tag":"direct"},{"type":"socks","tag":"relay","server":"1.1.1.1","server_port":1080}],"extension":{"precise":9007199254740993},"route":{"rules":[]}}`)
+	raw, _ = formatConfig(raw)
 	os.WriteFile(path, raw, 0600)
 	socket := filepath.Join(c.Config.State, "control.sock")
 	ln, e := net.Listen("unix", socket)

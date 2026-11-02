@@ -74,7 +74,7 @@ func newSyncController(t *testing.T) (*Controller, string, *int) {
 	return c, path, &activated
 }
 func syncPost(c *Controller, base, desired []byte) *httptest.ResponseRecorder {
-	body := canonical(map[string]any{"base": json.RawMessage(base), "hash": digest(base), "candidate": json.RawMessage(desired)})
+	body := canonical(map[string]any{"base_bytes": base, "hash": digest(base), "candidate": json.RawMessage(desired)})
 	r := httptest.NewRequest("POST", "/sbbot-apply", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	c.ServeHTTP(w, r)
@@ -269,5 +269,21 @@ func TestSharedPersistedSnapshotNumericCompatibility(t *testing.T) {
 	now, _ := os.ReadFile(path)
 	if _, e = DeleteInbound(now, "shared", id, journals); e != nil {
 		t.Fatal("persisted snapshot falsely conflicts", e)
+	}
+}
+
+func TestSharedPrettySnapshotExactByteCAS(t *testing.T) {
+	c, path, _ := newSyncController(t)
+	base, e := formatConfig(syncBase)
+	if e != nil {
+		t.Fatal(e)
+	}
+	os.WriteFile(path, base, 0600)
+	if w := syncPost(c, base, changeSyncUser(base, "a", "relay")); w.Code != 200 {
+		t.Fatal("pretty base rejected", w.Body.String())
+	}
+	after, _ := os.ReadFile(path)
+	if w := syncPost(c, after, changeSyncUser(after, "b", "relay")); w.Code != 200 {
+		t.Fatal("second pretty save rejected", w.Body.String())
 	}
 }
