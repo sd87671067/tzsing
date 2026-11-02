@@ -47,7 +47,7 @@ func (c *Controller) sbbotRequest(w http.ResponseWriter, r *http.Request, v serv
 				return
 			}
 			in["users"] = chosen
-			e = c.probeNode(scoped, v.Tag)
+			e = c.probeNode(c.publicProbeConfig(scoped, v.Tag), v.Tag)
 		} else {
 			var out map[string]any
 			for _, item := range array(conf["outbounds"]) {
@@ -120,11 +120,23 @@ func (c *Controller) verifyIdentity(config map[string]any, tag, user, ip string)
 	}
 	in["users"] = chosen
 	c.lastIP = ""
-	if e := c.probeNode(scoped, tag); e != nil {
+	if e := c.probeNode(c.publicProbeConfig(scoped, tag), tag); e != nil {
 		return e
 	}
 	if ip != "" && ip != c.lastIP {
 		return errors.New("用户实际出口与目标不一致")
 	}
 	return nil
+}
+
+func (c *Controller) publicProbeConfig(config map[string]any, tag string) map[string]any {
+	scoped := candidateMap(documentBytes(config))
+	ep := c.Config.Endpoints[tag]
+	if ep.Verified && ep.Port > 0 && ep.Port <= 65535 && ep.Host != "" {
+		if in := findInbound(scoped, tag); in != nil {
+			in["listen"] = ep.Host
+			in["listen_port"] = ep.Port
+		}
+	}
+	return scoped
 }

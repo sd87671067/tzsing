@@ -33,6 +33,9 @@ func mergeConfig(base, desired, latest []byte) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
+	if e := routeScopeConflicts(b, d, l); e != nil {
+		return nil, e
+	}
 	v, e := mergeValue(b, d, l, "")
 	if e != nil {
 		return nil, e
@@ -232,4 +235,47 @@ func preciseJSON(raw []byte) any {
 	var v any
 	d.Decode(&v)
 	return v
+}
+
+// Managers can encode the same UUID binding as a simple rule or logical guard.
+// Detect overlapping changes before comparing structural rule identities.
+func routeScopeConflicts(base, desired, latest any) error {
+	b, bok := base.(map[string]any)
+	d, dok := desired.(map[string]any)
+	l, lok := latest.(map[string]any)
+	if !bok || !dok || !lok {
+		return nil
+	}
+	scopes := map[string][2]string{}
+	for _, conf := range []map[string]any{b, d, l} {
+		for _, v := range array(conf["inbounds"]) {
+			in := object(v)
+			tag := text(in["tag"])
+			scopes[tag+"/\x00"] = [2]string{tag, ""}
+			for _, v := range array(in["users"]) {
+				name := text(object(v)["name"])
+				if name != "" {
+					scopes[tag+"/"+name] = [2]string{tag, name}
+				}
+			}
+		}
+	}
+	signature := func(conf map[string]any, scope [2]string) string {
+		rules := []any{}
+		for _, v := range array(object(conf["route"])["rules"]) {
+			rule := object(v)
+			action := text(rule["action"])
+			if text(rule["outbound"]) != "" && (action == "" || action == "route") && !definitelyExcludes(rule, scope[0], scope[1]) {
+				rules = append(rules, v)
+			}
+		}
+		return string(documentBytes(rules))
+	}
+	for _, scope := range scopes {
+		bs, ds, ls := signature(b, scope), signature(d, scope), signature(l, scope)
+		if bs != ds && bs != ls && ds != ls {
+			return conflict("route scope")
+		}
+	}
+	return nil
 }

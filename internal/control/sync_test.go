@@ -287,3 +287,32 @@ func TestSharedPrettySnapshotExactByteCAS(t *testing.T) {
 		t.Fatal("second pretty save rejected", w.Body.String())
 	}
 }
+
+func TestSharedMixedGuardAndPlainUUIDBindingConflict(t *testing.T) {
+	raw, _ := deletionFixture(t)
+	conf := candidateMap(raw)
+	in := findInbound(conf, "shared")
+	user := object(array(in["users"])[0])
+	name := text(user["name"])
+	id := identityDigest(user)
+	route := object(conf["route"])
+	route["rules"] = append(array(route["rules"]), map[string]any{"inbound": []any{"shared"}, "auth_user": []any{name}, "action": "route", "outbound": "direct"})
+	base := documentBytes(conf)
+	bot := changeSyncUser(base, name, "relay")
+	web, _, e := changeIdentity(base, "shared", id, findOutbound(conf, "relay"), nil, true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = mergeConfig(base, bot, web); e == nil {
+		t.Fatal("overlapping UUID binding hidden by different rule encodings")
+	}
+}
+func TestSharedProbeUsesVerifiedPublicListener(t *testing.T) {
+	c := &Controller{Config: ServiceConfig{Endpoints: map[string]Endpoint{"shared": {Host: "127.0.0.1", Port: 443, Verified: true}}}}
+	source := candidateMap(syncBase)
+	findInbound(source, "shared")["listen_port"] = 12345
+	scoped := c.publicProbeConfig(source, "shared")
+	if integerPort(findInbound(scoped, "shared")["listen_port"]) != 443 || integerPort(findInbound(source, "shared")["listen_port"]) != 12345 {
+		t.Fatal("public shared listener not used or source changed")
+	}
+}
