@@ -34,17 +34,23 @@ const UUIDEditor=(()=>{
    cancel.onclick=()=>{clear();navigate('overview')};reset.onclick=()=>{f.reset();buttons[0].b.click();describe()};actions.append(preview,cancel,reset);f.append(actions);host.append(UI.make('p','notice',c.reason),f);preview.disabled=!c.inbounds.length;
    f.onsubmit=async e=>{
     e.preventDefault();if(preview.disabled||!f.reportValidity())return;preview.disabled=true;
-    const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim();
+    const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim(),controls=[...f.querySelectorAll('input,select,button')].filter(x=>x!==preview).map(x=>[x,x.disabled]);controls.forEach(([x])=>x.disabled=true);
     try{
-     const summary=await api('admin/node-preview','POST',{server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}});
+     const request={server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}};
+     let summary=await api('admin/node-preview','POST',request),result;
      if(rev!==revision||me?.role!=='admin')return;
      if(!summary.writable)throw Error(summary.reason||c.reason||'生产写入未启用');
      const description='名称：'+nodeName+'\n入站：'+inbound.value+' · '+routeLabel+'\n共享 443、REALITY 密钥和握手配置保持现有值。\n将重启整个 sing-box，所有共享连接可能中断；失败自动回滚。\n'+summary.reason;
-     if(!await UI.confirm('确认添加 UUID 节点',description,'确认应用'))return;
-     const result=await api('admin/node-create','POST',{server:server.value,nonce:summary.nonce});
+     if(!await UI.confirm('确认添加 UUID 节点',description,'确认应用',{onConfirm:async()=>{
+      if(!summary)summary=await api('admin/node-preview','POST',request);
+      if(!summary.writable)throw Error(summary.reason||'生产写入未启用');
+      const nonce=summary.nonce;summary=null;
+      result=await api('admin/node-create','POST',{server:request.server,nonce});
+      if(!result.ok)throw Error('执行器未确认 UUID 创建，请刷新后核实');
+     }}))return;
      if(rev!==revision)return;uuid.value='';UI.notify(result.warning||'UUID 节点已添加并通过健康验证');navigate('overview');
 
-    }catch(e){if(rev===revision)UI.notify(e.message,'error')}finally{preview.disabled=false}
+    }catch(e){if(rev===revision)UI.notify(e.message,'error')}finally{controls.forEach(([x,disabled])=>x.disabled=disabled);preview.disabled=false}
    };
   }catch(e){if(rev===revision)host.replaceChildren(UI.make('p','notice',e.message))}
  }

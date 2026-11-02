@@ -20,12 +20,13 @@ func TestOutboundAdminPermissionSessionNonceAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	calls := 0
+	deleted := false
 	helper := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/outbound-preview" {
 			json.NewEncoder(w).Encode(map[string]any{"plan": "internal-plan", "tag": "provider", "ip": "8.8.8.8"})
 		} else {
 			calls++
-			json.NewEncoder(w).Encode(map[string]any{"ok": true, "tag": "provider"})
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "tag": "provider", "deleted": deleted})
 		}
 	})}
 	go helper.Serve(ln)
@@ -61,6 +62,20 @@ func TestOutboundAdminPermissionSessionNonceAndReplay(t *testing.T) {
 	f.db.QueryRow("SELECT name FROM nodes WHERE server='one' AND tag='provider'").Scan(&name)
 	if name != "共享出口" {
 		t.Fatal("alias not saved")
+	}
+	deleted = true
+	r = f.req(t, "POST", "/api/admin/outbounds", map[string]any{"action": "delete", "node": map[string]any{"tag": "provider"}}, f.admin, f.acs)
+	json.NewDecoder(r.Body).Decode(&out)
+	r.Body.Close()
+	r = f.req(t, "POST", "/api/admin/outbounds", map[string]any{"action": "apply", "nonce": out["nonce"]}, f.admin, f.acs)
+	r.Body.Close()
+	if r.StatusCode != 200 {
+		t.Fatal("delete apply", r.StatusCode)
+	}
+	var count int
+	f.db.QueryRow("SELECT count(*) FROM nodes WHERE server='one' AND tag='provider'").Scan(&count)
+	if count != 0 {
+		t.Fatal("deleted outbound metadata resurrected")
 	}
 }
 func TestPolicyVisibilityInAdminViewerAPIAndWebSocket(t *testing.T) {

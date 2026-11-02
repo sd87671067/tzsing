@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"tzsingbox/internal/auth"
@@ -30,12 +31,12 @@ func outboundRefs(config map[string]any, tag string) []string {
 					switch z := value.(type) {
 					case string:
 						if z == tag {
-							refs[path] = true
+							refs[path+"/"+k] = true
 						}
 					case []any:
-						for _, q := range z {
+						for i, q := range z {
 							if q == tag {
-								refs[path] = true
+								refs[fmt.Sprintf("%s/%s/%d", path, k, i)] = true
 							}
 						}
 					}
@@ -64,6 +65,7 @@ func outboundRefs(config map[string]any, tag string) []string {
 	for p := range refs {
 		out = append(out, p)
 	}
+	sort.Strings(out)
 	return out
 }
 func findOutbound(config map[string]any, tag string) map[string]any {
@@ -79,7 +81,7 @@ func findOutbound(config map[string]any, tag string) map[string]any {
 // Only self-contained client configuration is accepted. Local file references,
 // detours and listener-like fields cannot turn a client into a privileged reader.
 func safeOutbound(o map[string]any) bool {
-	allowed := " type tag server server_port username password version uuid flow security alter_id method tls transport obfs up_mbps down_mbps ports hop_interval congestion_control zero_rtt heartbeat network packet_encoding udp_over_tcp multiplex private_key public_key host_key host_key_algorithms client_version "
+	allowed := " type tag server server_port username password version uuid flow security alter_id method tls transport obfs up_mbps down_mbps ports hop_interval congestion_control zero_rtt heartbeat network domain_resolver domain_strategy packet_encoding udp_over_tcp multiplex private_key public_key host_key host_key_algorithms client_version "
 	for k := range o {
 		if !strings.Contains(allowed, " "+k+" ") {
 			return false
@@ -115,8 +117,8 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 		if old == nil {
 			return nil, nil, ErrScope
 		}
-		if len(outboundRefs(config, v.Tag)) > 0 {
-			return nil, nil, fmt.Errorf("出站仍被引用，请先解除或迁移绑定")
+		if refs := outboundRefs(config, v.Tag); len(refs) > 0 {
+			return nil, nil, fmt.Errorf("出站仍被引用：%s；请在对应 UUID 中更换出站或恢复原出站，再删除；链式、路由和 DNS 引用须先迁移", strings.Join(refs, "、"))
 		}
 		outs := []any{}
 		for _, x := range array(config["outbounds"]) {
@@ -208,7 +210,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 			if kind != "actual" && text(o["type"]) != "selector" && text(o["type"]) != "urltest" {
 				continue
 			}
-			items = append(items, map[string]any{"tag": text(o["tag"]), "protocol": text(o["type"]), "server": text(o["server"]), "port": o["server_port"], "tls": object(o["tls"])["enabled"] == true, "credentials_present": text(o["password"]) != "" || text(o["uuid"]) != "", "references": outboundRefs(config, text(o["tag"]))})
+			items = append(items, map[string]any{"tag": text(o["tag"]), "protocol": text(o["type"]), "method": text(o["method"]), "server": text(o["server"]), "port": o["server_port"], "tls": object(o["tls"])["enabled"] == true, "credentials_present": text(o["password"]) != "" || text(o["uuid"]) != "", "references": outboundRefs(config, text(o["tag"]))})
 		}
 		send(map[string]any{"items": items, "writable": writeEnabled, "mappings": outboundMappings(config)})
 		return
@@ -318,7 +320,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 			fail(409, e.Error())
 			return
 		}
-		send(map[string]any{"ok": true, "tag": p.Tag, "ip": c.lastIP})
+		send(map[string]any{"ok": true, "tag": p.Tag, "ip": c.lastIP, "deleted": p.Action == "outbound-delete"})
 		return
 	}
 	fail(404, "未知操作")

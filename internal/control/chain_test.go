@@ -16,6 +16,8 @@ func TestChainDependenciesDynamicAndCycles(t *testing.T) {
 	hop := out("http", "hop")
 	hop["detour"] = "socks"
 	socks := out("socks", "socks")
+	socks["domain_resolver"] = "dns-google"
+	socks["domain_strategy"] = "ipv4_only"
 	sel := map[string]any{"type": "urltest", "tag": "choose", "outbounds": []any{"exit", "direct"}}
 	direct := map[string]any{"type": "direct", "tag": "direct"}
 	config := map[string]any{"outbounds": []any{a, hop, socks, sel, direct}}

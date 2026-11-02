@@ -125,7 +125,12 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		out, status := a.hostControl(r.Context(), "outbound-apply", map[string]string{"plan": n.Plan})
 		if status == 200 {
 			tag, _ := out["tag"].(string)
-			if tag != "" {
+			if tag != "" && out["deleted"] == true {
+				_, e = a.DB.Exec("DELETE FROM nodes WHERE server=? AND tag=?", a.ControlServer, tag)
+				if e != nil {
+					out["warning"] = "出站已删除，显示名称清理失败"
+				}
+			} else if tag != "" {
 				_, e = a.DB.Exec("INSERT INTO nodes(id,server,tag,name) VALUES(?,?,?,?) ON CONFLICT(server,tag) DO UPDATE SET name=excluded.name", auth.Random(), a.ControlServer, tag, n.Node)
 				if e != nil {
 					out["warning"] = "出站已生效，显示名称保存失败"

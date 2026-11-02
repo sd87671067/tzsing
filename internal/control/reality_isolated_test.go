@@ -145,12 +145,27 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 		}
 		return errors.New("isolated path did not match " + want)
 	}
-	healthy := func(map[string]any) error {
+	healthy := func(config map[string]any) error {
 		if failHealth && activations == healthActivation {
 			failHealth = false
 			return errors.New("injected health failure")
 		}
-		return wait(cb, "127.0.0.2")
+		want := "127.0.0.2"
+		for _, v := range array(object(config["route"])["rules"]) {
+			rule := object(v)
+			if string(canonical(rule["auth_user"])) == `["bob"]` {
+				switch text(findOutbound(config, text(rule["outbound"]))["type"]) {
+				case "shadowsocks":
+					want = "127.0.0.4"
+				case "socks":
+					want = "127.0.0.3"
+				case "http":
+					want = "127.0.0.5"
+				}
+				break
+			}
+		}
+		return wait(cb, want)
 	}
 	if e := activate(); e != nil {
 		t.Fatal(e)
@@ -162,6 +177,100 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 		t.Fatal(e)
 	}
 	c := &Controller{Config: ServiceConfig{Config: path, State: dir}, Hooks: &ApplyHooks{Check: check, Activate: activate, Healthy: healthy, Probe: func(map[string]any) error { return nil }}}
+
+	c.Config.WriteEnabled = true
+	applyIdentity := id
+	callNode := func(endpoint string, body any, status int) map[string]any {
+		if endpoint == "/preview" || endpoint == "/restore-preview" {
+			applyIdentity = text(body.(map[string]any)["auth_id"])
+		}
+		if endpoint == "/apply" {
+			body.(map[string]any)["tag"] = "shared"
+			body.(map[string]any)["auth_id"] = applyIdentity
+		}
+		w := httptest.NewRecorder()
+		c.ServeHTTP(w, httptest.NewRequest("POST", endpoint, strings.NewReader(string(canonical(body)))))
+		if w.Code != status {
+			t.Fatalf("%s: %d %s", endpoint, w.Code, w.Body.String())
+		}
+		return candidateMap(w.Body.Bytes())
+	}
+	ssPort, httpPort := freePort(t), freePort(t)
+	secret := "synthetic @:#% password"
+	start("ss-remote", map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "shadowsocks", "listen": "127.0.0.1", "listen_port": ssPort, "method": "aes-128-gcm", "password": secret}}, "outbounds": []any{direct("127.0.0.4")}})
+	start("http-remote", map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "http", "listen": "127.0.0.1", "listen_port": httpPort, "users": []any{map[string]any{"username": "test @#%", "password": secret}}}}, "outbounds": []any{direct("127.0.0.5")}})
+	configs := []map[string]any{
+		{"type": "shadowsocks", "server": "127.0.0.1", "server_port": ssPort, "method": "aes-128-gcm", "password": secret},
+		{"type": "socks", "server": "127.0.0.1", "server_port": upstream},
+		{"type": "http", "server": "127.0.0.1", "server_port": httpPort, "username": "test @#%", "password": secret},
+		{"type": "direct"},
+	}
+	tags := []string{}
+	for _, conf := range configs {
+		preview := callNode("/outbound-preview", map[string]any{"action": "save", "outbound_node": map[string]any{"config": conf}}, 200)
+		saved := callNode("/outbound-apply", map[string]any{"plan": preview["plan"]}, 200)
+		tag := text(saved["tag"])
+		tags = append(tags, tag)
+		loaded, _ := os.ReadFile(path)
+		if findOutbound(candidateMap(loaded), tag) == nil {
+			t.Fatal("outbound not committed")
+		}
+	}
+	// The same authenticated SS endpoint also round-trips through a node link.
+	ssLink := "ss://" + base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:"+secret)) + "@127.0.0.1:" + strconv.Itoa(ssPort)
+	linked := callNode("/outbound-preview", map[string]any{"action": "save", "outbound_node": map[string]any{"link": ssLink}}, 200)
+	linkedSaved := callNode("/outbound-apply", map[string]any{"plan": linked["plan"]}, 200)
+	tags = append(tags, text(linkedSaved["tag"]))
+	for i, want := range []string{"127.0.0.4", "127.0.0.3", "127.0.0.5"} {
+		preview := callNode("/preview", map[string]any{"tag": "shared", "auth_id": id, "outbound": tags[i]}, 200)
+		callNode("/apply", map[string]any{"plan": preview["plan"]}, 200)
+		if e := wait(ca, want); e != nil {
+			t.Fatal("UUID A", e)
+		}
+		if e := wait(cb, "127.0.0.2"); e != nil {
+			t.Fatal("UUID B affected", e)
+		}
+		if i == 0 {
+			denied := callNode("/outbound-preview", map[string]any{"action": "delete", "outbound_node": map[string]any{"tag": tags[i]}}, 422)
+			if !strings.Contains(text(denied["error"]), "route/rules/") {
+				t.Fatal("reference location missing")
+			}
+		}
+		t.Logf("UUID A %s actual exit %s; UUID B 127.0.0.2", text(configs[i]["type"]), want)
+	}
+	previewRestore := callNode("/restore-preview", map[string]any{"tag": "shared", "auth_id": id}, 200)
+	callNode("/apply", map[string]any{"plan": previewRestore["plan"]}, 200)
+	if e := wait(ca, "127.0.0.2"); e != nil {
+		t.Fatal("restore", e)
+	}
+	for _, uid := range []string{id, model.UUIDAuthID(bob)} {
+		p := callNode("/preview", map[string]any{"tag": "shared", "auth_id": uid, "outbound": tags[0]}, 200)
+		callNode("/apply", map[string]any{"plan": p["plan"]}, 200)
+	}
+	for _, port := range []int{ca, cb} {
+		if e := wait(port, "127.0.0.4"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, uid := range []string{model.UUIDAuthID(bob), id} {
+		p := callNode("/restore-preview", map[string]any{"tag": "shared", "auth_id": uid}, 200)
+		callNode("/apply", map[string]any{"plan": p["plan"]}, 200)
+	}
+	for _, tag := range tags {
+		p := callNode("/outbound-preview", map[string]any{"action": "delete", "outbound_node": map[string]any{"tag": tag}}, 200)
+		callNode("/outbound-apply", map[string]any{"plan": p["plan"]}, 200)
+		loaded, _ := os.ReadFile(path)
+		if findOutbound(candidateMap(loaded), tag) != nil {
+			t.Fatal("deleted tag still loaded")
+		}
+		for _, port := range []int{ca, cb} {
+			if e := wait(port, "127.0.0.2"); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	raw, _ = os.ReadFile(path)
+	t.Log("outbound creation/deletion, SS/SOCKS/HTTP switches, shared binding and restoration verified by real UUID connections")
 	out := map[string]any{"type": "socks", "tag": managedTag(identityKey("shared", id)), "server": "127.0.0.1", "server_port": upstream}
 	changed, s, e := ChangeIdentity(raw, "shared", id, out, nil)
 	if e != nil {
