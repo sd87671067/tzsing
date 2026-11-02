@@ -161,6 +161,7 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			if fresh.Role != "admin" && !actions["change"] {
 				out["outbounds"] = []any{}
 			}
+			out["delete"] = fresh.Role == "admin" && actions["change"] && out["delete"] == true
 			out["actions"] = actions
 			out["nonce"] = issue("", "")
 			out["apply"] = out["apply"] == true && actions["change"]

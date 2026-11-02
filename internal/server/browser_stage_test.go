@@ -67,6 +67,14 @@ func TestAdminBrowserStage(t *testing.T) {
 	for i, tag := range tags {
 		f.db.Exec("INSERT INTO nodes(id,server,tag) VALUES(?, 'one',?)", []string{"alice", "bob"}[i], tag.Name)
 	}
+	if os.Getenv("TZSING_DELETE_STAGE") == "1" {
+		for _, typ := range []string{"shadowsocks", "trojan", "socks", "http"} {
+			id := model.AuthID("synthetic-" + typ)
+			raw := model.IdentityName(typ, id)
+			tags = append(tags, model.Tag{Name: raw, AuthName: "Synthetic " + typ, AuthID: id, InboundTag: typ, Identity: "inbound", Type: typ, Accounting: "unavailable"})
+			f.db.Exec("INSERT INTO nodes(id,server,tag) VALUES(?,'one',?)", typ, raw)
+		}
+	}
 	f.db.Exec("DELETE FROM grants WHERE user_id=2")
 	f.db.Exec("INSERT INTO grants VALUES(2,'one',?)", tags[0].Name)
 	f.db.Exec("INSERT INTO user_operations VALUES(2,'change')")

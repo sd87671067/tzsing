@@ -35,3 +35,13 @@ func TestOutboundDeletionRejectsEveryReferenceRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestOutboundDeletionPreservesImplicitDefault(t *testing.T) {
+	raw := []byte(`{"inbounds":[{"type":"socks","tag":"listener","listen_port":1080}],"outbounds":[{"type":"direct","tag":"default"},{"type":"shadowsocks","tag":"unused"}]}`)
+	if _, _, e := outboundCandidate(raw, OutboundNodeRequest{Tag: "default"}, "delete"); e == nil {
+		t.Fatal("implicit default deleted")
+	}
+	if _, _, e := outboundCandidate(raw, OutboundNodeRequest{Tag: "unused"}, "delete"); e != nil {
+		t.Fatal("unused outbound rejected", e)
+	}
+}

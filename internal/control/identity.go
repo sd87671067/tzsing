@@ -150,42 +150,7 @@ func IdentityMutation(raw []byte, tag, id, action string) ([]byte, error) {
 			return nil, errors.New("没有本系统管理的停用规则")
 		}
 	case "delete":
-		// Refuse deleting while managed outbound snapshots exist; restore first.
-		for _, v := range array(c["outbounds"]) {
-			if text(object(v)["tag"]) == managedTag(identityKey(tag, id)) {
-				return nil, errors.New("请先恢复原始出站再删除")
-			}
-		}
-		in := findInbound(c, tag)
-		users := []any{}
-		for _, v := range array(in["users"]) {
-			if !reflect.DeepEqual(v, u) {
-				users = append(users, v)
-			}
-		}
-		if len(users) == 0 {
-			return nil, errors.New("最后一个 UUID 不支持在此删除")
-		}
-		in["users"] = users
-		clean := []any{}
-		for _, v := range kept {
-			r := object(v)
-			if len(r) == 4 && text(r["action"]) == "route" && string(canonical(r["inbound"])) == string(canonical([]string{tag})) && string(canonical(r["auth_user"])) == string(canonical([]string{text(u["name"])})) {
-				continue
-			}
-			clean = append(clean, v)
-		}
-		kept = clean
-		stats := object(object(object(c["experimental"])["v2ray_api"])["stats"])
-		if stats["enabled"] == true {
-			names := []any{}
-			for _, v := range array(stats["users"]) {
-				if text(v) != text(u["name"]) {
-					names = append(names, v)
-				}
-			}
-			stats["users"] = names
-		}
+		return DeleteInbound(raw, tag, id, nil)
 	default:
 		return nil, ErrScope
 	}

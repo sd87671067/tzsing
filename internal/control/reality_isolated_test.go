@@ -353,13 +353,40 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 	if e = wait(cb, "127.0.0.2"); e != nil {
 		t.Fatal("peer after creation", e)
 	}
-	deleted, e := IdentityMutation(afterCreate, "shared", model.UUIDAuthID(fresh), "delete")
-	if e != nil {
-		t.Fatal(e)
+
+	// Bind the newly created UUID, then delete it without a restore activation.
+	freshID := model.UUIDAuthID(fresh)
+	freshOut := candidateMap(canonical(out))
+	freshOut["tag"] = managedTag(identityKey("shared", freshID))
+	switched, snapshot, err := ChangeIdentity(afterCreate, "shared", freshID, freshOut, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if e = c.apply(plan{Hash: digest(afterCreate), Tag: "shared", AuthID: model.UUIDAuthID(fresh), Action: "delete", Candidate: deleted}); e != nil {
-		t.Fatal(e)
+	if err = c.apply(plan{Hash: digest(afterCreate), Tag: "shared", AuthID: freshID, Candidate: switched, Snapshot: snapshot}); err != nil {
+		t.Fatal(err)
 	}
+	if err = wait(cc, "127.0.0.3"); err != nil {
+		t.Fatal(err)
+	}
+	beforeDeleteActivations := activations
+	deletionPreview := call("/preview", map[string]any{"tag": "shared", "auth_id": freshID, "action": "delete"})
+	call("/apply", map[string]any{"tag": "shared", "auth_id": freshID, "plan": deletionPreview["plan"]})
+	if activations != beforeDeleteActivations+1 {
+		t.Fatal("deletion must activate once")
+	}
+	afterDelete, _ := os.ReadFile(path)
+	actual := findInbound(candidateMap(afterDelete), "shared")
+	if _, err = deletionUser(actual, freshID); err == nil {
+		t.Fatal("deleted identity still in running config")
+	}
+	if actual["listen_port"] != float64(443) || !reflect.DeepEqual(actual["tls"], findInbound(candidateMap(afterCreate), "shared")["tls"]) {
+		t.Fatal("443 or REALITY changed")
+	}
+	journals, _ := c.journals()
+	if _, ok := journals[identityKey("shared", freshID)]; ok {
+		t.Fatal("stale management snapshot")
+	}
+
 	if _, e = request(cc); e == nil {
 		t.Fatal("deleted UUID still connects")
 	}

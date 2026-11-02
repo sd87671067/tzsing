@@ -84,3 +84,85 @@ func TestIdentityControlUsesCurrentReportAndRejectsInboundMutation(t *testing.T)
 		t.Fatal("credential logged")
 	}
 }
+
+func TestDeleteProtocolIdentityBoundaryAndAdminPermission(t *testing.T) {
+	for _, typ := range []string{"vless", "shadowsocks", "trojan", "socks", "http"} {
+		t.Run(typ, func(t *testing.T) {
+			f := setup(t)
+			id := model.AuthID("alice")
+			raw := model.IdentityName("target", id)
+			report, _ := json.Marshal(model.Report{ServerID: "one", At: time.Now().Unix(), Tags: []model.Tag{{Name: raw, InboundTag: "target", AuthID: id, Identity: "inbound", Type: typ}}})
+			f.db.Exec("UPDATE servers SET report=?,seen=? WHERE id='one'", report, time.Now().Unix())
+			f.db.Exec("INSERT INTO nodes(id,server,tag) VALUES('delete-target','one',?)", raw)
+			f.db.Exec("INSERT INTO grants VALUES(2,'one',?)", raw)
+			f.db.Exec("INSERT INTO user_operations VALUES(2,'change')")
+			f.db.Exec("INSERT INTO control_permissions VALUES(1,'change')")
+			socket := filepath.Join(t.TempDir(), "delete.sock")
+			ln, e := net.Listen("unix", socket)
+			if e != nil {
+				t.Fatal(e)
+			}
+			applies := 0
+			host := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var v map[string]string
+				json.NewDecoder(r.Body).Decode(&v)
+				if r.URL.Path != "/outbound-catalog" && (v["tag"] != "target" || v["auth_id"] != id) {
+					t.Error("lost protocol identity")
+				}
+				switch r.URL.Path {
+				case "/outbound-catalog":
+					w.Write([]byte(`{"items":[],"mappings":{}}`))
+				case "/status":
+					w.Write([]byte(`{"delete":true,"apply":false}`))
+				case "/preview":
+					if v["action"] != "delete" {
+						t.Error("not a deletion")
+					}
+					w.Write([]byte(`{"plan":"delete-plan","writable":true,"effects":{}}`))
+				case "/apply":
+					applies++
+					if v["plan"] != "delete-plan" {
+						t.Error("wrong plan")
+					}
+					w.Write([]byte(`{"ok":true}`))
+				default:
+					t.Error("unexpected controller operation", r.URL.Path)
+				}
+			})}
+			go host.Serve(ln)
+			defer host.Close()
+			f.app.ControlSocket = socket
+			f.app.ControlServer = "one"
+			call := func(method, path string, body any, admin bool, want int) map[string]any {
+				t.Helper()
+				cookie, csrf := f.user, f.ucs
+				if admin {
+					cookie, csrf = f.admin, f.acs
+				}
+				res := f.req(t, method, "/api/control/"+path, body, cookie, csrf)
+				defer res.Body.Close()
+				v := map[string]any{}
+				json.NewDecoder(res.Body).Decode(&v)
+				if res.StatusCode != want {
+					t.Fatal(path, res.StatusCode, v)
+				}
+				return v
+			}
+			viewer := call("GET", "status?node_id=delete-target", nil, false, 200)
+			if viewer["delete"] != false {
+				t.Fatal("viewer advertised deletion")
+			}
+			call("POST", "preview", map[string]any{"node_id": "delete-target", "nonce": viewer["nonce"], "action": "delete"}, false, 403)
+			g := call("GET", "status?node_id=delete-target", nil, true, 200)
+			if g["delete"] != true {
+				t.Fatal("admin deletion missing")
+			}
+			p := call("POST", "preview", map[string]any{"node_id": "delete-target", "nonce": g["nonce"], "action": "delete"}, true, 200)
+			call("POST", "apply", map[string]any{"node_id": "delete-target", "nonce": p["nonce"]}, true, 200)
+			call("POST", "apply", map[string]any{"node_id": "delete-target", "nonce": p["nonce"]}, true, 409)
+			if applies != 1 {
+				t.Fatal("unexpected apply count", applies)
+			}
+		})
+	}
+}

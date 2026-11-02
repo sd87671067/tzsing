@@ -39,6 +39,7 @@ type plan struct {
 	Policy         *policy.Limit
 	Hash, Tag      string
 	AuthID, Action string
+	JournalHash    string
 	Candidate      []byte
 	Snapshot       Snapshot
 	Restore        bool
@@ -269,6 +270,9 @@ func (c *Controller) apply(p plan) error {
 	if e != nil {
 		return e
 	}
+	if p.Action == "delete" && p.JournalHash != "" && digest(canonical(journals)) != p.JournalHash {
+		return errors.New("管理快照在预览后发生变化；未删除，请重新确认")
+	}
 	oldJournals := map[string]Snapshot{}
 	for k, v := range journals {
 		oldJournals[k] = v
@@ -328,7 +332,7 @@ func (c *Controller) apply(p plan) error {
 			return rollback(e)
 		}
 	}
-	if p.Action != "" && p.Action != "outbound-save" && p.Action != "outbound-delete" && c.Hooks == nil {
+	if p.Action != "" && p.Action != "outbound-save" && p.Action != "outbound-delete" && c.Hooks == nil && text(findInbound(candidate, p.Tag)["type"]) == "vless" {
 		peers := candidateMap(p.Candidate)
 		in := findInbound(peers, p.Tag)
 		users := []any{}
@@ -374,6 +378,18 @@ func (c *Controller) apply(p plan) error {
 	if readErr != nil || digest(currentAfter) != digest(p.Candidate) {
 		return rollback(errors.New("应用期间发生外部写入"))
 	}
+	if p.Action == "delete" {
+		actual := candidateMap(currentAfter)
+		remaining := findInbound(actual, p.Tag)
+		if p.AuthID == "" && remaining != nil {
+			return rollback(errors.New("重新读取运行配置后目标监听器仍存在"))
+		}
+		if p.AuthID != "" && remaining != nil {
+			if _, err := deletionUser(remaining, p.AuthID); err == nil {
+				return rollback(errors.New("重新读取运行配置后目标身份仍存在"))
+			}
+		}
+	}
 	if c.Config.ExitFile != "" && c.lastIP != "" && p.Action != "outbound-save" && p.Action != "outbound-delete" {
 		receipt := map[string]any{"config_hash": digest(p.Candidate), "tag": p.Tag, "outbound": text(p.Snapshot.Outbound["tag"]), "ip": c.lastIP, "at": time.Now().Unix()}
 		atomicFile(c.Config.ExitFile, canonical(receipt), 0644)
@@ -389,8 +405,11 @@ func (c *Controller) apply(p plan) error {
 			journals[key] = snapshot
 		}
 	}
-	if p.Restore {
+	if p.Restore || p.Action == "delete" {
 		delete(journals, planKey(p))
+		if p.Action == "delete" {
+			delete(journals, planKey(p)+":disabled")
+		}
 	} else {
 		if p.Action == "" {
 			journals[planKey(p)] = p.Snapshot
@@ -601,7 +620,17 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(403, "认证身份的独立路由应用尚不可用；禁止修改整个入站")
 			return
 		}
-		in, e = IdentityInbound(in, v.AuthID)
+		if r.URL.Path == "/status" || r.URL.Path == "/preview" && v.Action == "delete" || r.URL.Path == "/apply" {
+			var user map[string]any
+			user, e = deletionUser(in, v.AuthID)
+			if e == nil {
+				scoped := candidateMap(canonical(in))
+				scoped["users"] = []any{user}
+				in = scoped
+			}
+		} else {
+			in, e = IdentityInbound(in, v.AuthID)
+		}
 		if e != nil {
 			fail(403, "认证身份已变化或不存在")
 			return
@@ -636,7 +665,14 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if !writeEnabled {
 			restoreReason = reason
 		}
-		respond(map[string]any{"restore_reason": restoreReason, "apply": writeEnabled && supportsNode(in) && (v.AuthID != "" || len(array(in["users"])) <= 1), "restore": writeEnabled && (v.AuthID != "" || len(array(in["users"])) <= 1) && journals[journalKey].Outbound != nil, "share": len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "outbounds": UUIDCatalog(raw)["outbounds"], "preview": true, "reason": reason, "impact": impact})
+		_, deleteErr := DeleteInbound(raw, v.Tag, v.AuthID, journals)
+		deleteReason := ""
+		if deleteErr != nil {
+			deleteReason = deleteErr.Error()
+		} else if !writeEnabled {
+			deleteReason = reason
+		}
+		respond(map[string]any{"delete": writeEnabled && deleteErr == nil, "delete_reason": deleteReason, "restore_reason": restoreReason, "apply": writeEnabled && (v.AuthID == "" || text(in["type"]) == "vless") && supportsNode(in) && (v.AuthID != "" || len(array(in["users"])) <= 1), "restore": writeEnabled && (v.AuthID != "" || len(array(in["users"])) <= 1) && journals[journalKey].Outbound != nil, "share": (v.AuthID == "" || text(in["type"]) == "vless") && len(Profiles(in, c.Config.Endpoints[v.Tag])) > 0, "profiles": Profiles(in, c.Config.Endpoints[v.Tag]), "outbounds": UUIDCatalog(raw)["outbounds"], "preview": true, "reason": reason, "impact": impact})
 	case "/share":
 		link, e := Share(in, c.Config.Endpoints[v.Tag], v.Profile, v.Label)
 		if e != nil {
@@ -646,7 +682,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.audit("share", v.Tag)
 		respond(map[string]string{"link": link})
 	case "/preview", "/restore-preview":
-		if v.AuthID == "" && len(array(in["users"])) > 1 {
+		if v.Action != "delete" && v.AuthID == "" && len(array(in["users"])) > 1 {
 			fail(403, "共享监听器必须选择单个 UUID")
 			return
 		}
@@ -678,7 +714,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.Restore = true
 			preview = map[string]any{"protocol": "原始映射", "server": "已保存的实际原配置", "port": 0}
 		} else if v.Action != "" {
-			if v.AuthID == "" {
+			if v.AuthID == "" && v.Action != "delete" {
 				fail(403, "必须指定单个 UUID")
 				return
 			}
@@ -686,11 +722,12 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				fail(409, "停用规则来源或配置版本已变化，不能安全启用")
 				return
 			}
-			if v.Action == "delete" && journals[journalKey].Outbound != nil {
-				fail(409, "请先恢复原始出站")
-				return
+			if v.Action == "delete" {
+				p.Candidate, e = DeleteInbound(raw, v.Tag, v.AuthID, journals)
+				p.JournalHash = digest(canonical(journals))
+			} else {
+				p.Candidate, e = IdentityMutation(raw, v.Tag, v.AuthID, v.Action)
 			}
-			p.Candidate, e = IdentityMutation(raw, v.Tag, v.AuthID, v.Action)
 			if e == nil && v.Action == "disable" {
 				p.Snapshot = Snapshot{BaselineHash: baselineHash(candidateMap(p.Candidate))}
 			}
@@ -737,7 +774,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if e != nil {
-			fail(409, ErrScope.Error())
+			fail(409, e.Error())
 			return
 		}
 		if e = c.check(p.Candidate); e != nil {

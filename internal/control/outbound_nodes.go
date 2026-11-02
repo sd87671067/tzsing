@@ -22,6 +22,10 @@ type OutboundNodeRequest struct {
 
 func outboundRefs(config map[string]any, tag string) []string {
 	refs := map[string]bool{}
+	outs := array(config["outbounds"])
+	if len(array(config["inbounds"])) > 0 && text(object(config["route"])["final"]) == "" && len(outs) > 0 && text(object(outs[0])["tag"]) == tag {
+		refs["route/implicit_final"] = true
+	}
 	var scan func(any, string)
 	scan = func(v any, path string) {
 		switch x := v.(type) {
@@ -117,8 +121,21 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 		if old == nil {
 			return nil, nil, ErrScope
 		}
+		kind, _ := model.OutboundType(text(old["type"]))
+		if kind != "actual" {
+			return nil, nil, fmt.Errorf("系统保留或逻辑出站不能在此删除：%s", text(old["type"]))
+		}
+		matches := 0
+		for _, x := range array(config["outbounds"]) {
+			if text(object(x)["tag"]) == v.Tag {
+				matches++
+			}
+		}
+		if matches != 1 {
+			return nil, nil, fmt.Errorf("出站标签不唯一，无法安全删除")
+		}
 		if refs := outboundRefs(config, v.Tag); len(refs) > 0 {
-			return nil, nil, fmt.Errorf("出站仍被引用：%s；请在对应 UUID 中更换出站或恢复原出站，再删除；链式、路由和 DNS 引用须先迁移", strings.Join(refs, "、"))
+			return nil, nil, fmt.Errorf("出站仍被引用：%s；共享资源保留，请先迁移这些引用", strings.Join(refs, "、"))
 		}
 		outs := []any{}
 		for _, x := range array(config["outbounds"]) {

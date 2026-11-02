@@ -3,6 +3,7 @@
 // own dialogs. Sensitive links exist only during an explicit protected action.
 const NodeControl=(()=>{
  let menu=null,editor=null,key=null;
+ const deleting=new Set();
  function invalidate(){menu?.force();editor?.force();menu=null;editor=null;key=null}
  function reconcile(){if(key&&!rows.has(key))invalidate()}
  async function gate(id){return api('control/status?'+new URLSearchParams({node_id:id}))}
@@ -69,25 +70,40 @@ const NodeControl=(()=>{
   }
   const previewOnly=node('button','action-item');previewOnly.type='button';previewOnly.hidden=true;previewOnly.append(UI.icon('change'),node('span','','解析出站链接（只读）'));previewOnly.onclick=()=>{m.force();edit(id,trigger,false,true)};body.append(previewOnly);
   const status=node('p','notice','正在检查独立权限与入站资料…');body.append(status);
-  const del=node('button','action-item danger');del.hidden=me?.role!=='admin';del.type='button';del.append(UI.icon('close'),node('span','','删除节点'));del.onclick=()=>{m.force();mutate(id,trigger,'delete')};body.append(del);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
-  try{const g=await gate(id);if(menu!==m||!m.d.open)return;for(const[b,action]of items){if(me?.role!=='admin')b.hidden=!g.actions?.[action];b.disabled=action==='change'?!g.apply||g.actions?.change===false:action==='restore'?!g.restore:!g.share||!g.actions?.[action];b.title=b.disabled?(action==='restore'?(g.restore_reason||g.reason):g.reason)||'此入站、权限或控制条件不满足':''}previewOnly.hidden=!!g.apply||!g.preview||g.actions?.change===false;text(status,g.reason+(!g.restore&&g.restore_reason?'；恢复：'+g.restore_reason:''))}catch(e){if(menu===m)text(status,e.message)}
+  const del=node('button','action-item danger');del.hidden=me?.role!=='admin';del.type='button';del.disabled=true;del.append(UI.icon('close'),node('span','','删除节点'));del.onclick=()=>{m.force();mutate(id,trigger,'delete')};body.append(del);const m=UI.modal(r.t.name,body,{trigger,variant:'action-sheet',onClose:()=>{if(menu===m)menu=null;if(!editor&&!menu)key=null}});menu=m;
+  try{const g=await gate(id);if(menu!==m||!m.d.open)return;del.disabled=!g.delete;del.title=g.delete_reason||'';for(const[b,action]of items){if(me?.role!=='admin')b.hidden=!g.actions?.[action];b.disabled=action==='change'?!g.apply||g.actions?.change===false:action==='restore'?!g.restore:!g.share||!g.actions?.[action];b.title=b.disabled?(action==='restore'?(g.restore_reason||g.reason):g.reason)||'此入站、权限或控制条件不满足':''}previewOnly.hidden=!!g.apply||!g.preview||g.actions?.change===false;text(status,g.reason+(g.delete_reason?'；删除：'+g.delete_reason:'')+(!g.restore&&g.restore_reason?'；恢复：'+g.restore_reason:''))}catch(e){if(menu===m)text(status,e.message)}
  }
  function confirmationText(r,e,change){
   if(!e)return '缺少可靠影响预览，请重新预览。';
   return r.t.name+' · '+(r.t.auth_name||r.t.auth_id?.slice(0,12)||r.t.inbound_tag||'')+'\n修改：'+change+'\n需要重启整个 sing-box 实例。共享监听器 '+e.shared_listener+'，其他 UUID '+e.other_uuids+' 个。\n影响监听器：'+(e.listeners||[]).map(l=>l.tag+':'+l.port).join('、')+'。\n现有连接可能中断；失败自动恢复并验证服务。';
  }
+ async function remove(id,trigger){
+  const r=rows.get(id);if(!r||me?.role!=='admin'||deleting.has(id))return;
+  deleting.add(id);
+  try{
+   const description=r.t.name+' · '+r.t.type+'\n删除'+(r.t.auth_id?(r.t.type==='vless'?'当前 UUID；保留共享监听器及其他 UUID。':'当前认证用户；保留其他用户，最后一个用户的独立监听器也将安全移除。'):'此独立入站监听器。')+'\n自动清理目标专属出站绑定、认证路由、停用规则及管理快照；共享出站、DNS、链式配置和历史流量保留。\n应用需重启整个 sing-box，现有连接可能中断；校验或健康检查失败自动回滚。外部规则归属冲突时拒绝删除。';
+   if(!await UI.confirm('确认删除节点',description,'删除节点',{onConfirm:async()=>{
+    const g=await gate(id);if(!g.delete)throw Error(g.delete_reason||g.reason||'目标当前不能安全删除');
+    const p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:'delete'});
+    if(!p.writable||!p.effects)throw Error(p.reason||'缺少可靠删除预览');
+    await api('control/apply','POST',{node_id:id,nonce:p.nonce});
+   }}))return;
+   UI.notify('节点已删除');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('删除已生效；刷新失败：'+e.message,'error')}
+  }finally{deleting.delete(id);trigger?.focus()}
+ }
  async function mutate(id,trigger,action){
+  if(action==='delete')return remove(id,trigger);
   const r=rows.get(id);if(!r||me?.role!=='admin')return;
-  const body=node('form','control-body'),select=node('select'),preview=node('p','notice'),save=node('button',action==='delete'?'danger':'primary',action==='delete'?'删除节点':'配置预览'),cancel=node('button','','取消'),actions=node('div','row-actions');
-  for(const [value,label]of action==='delete'?[['delete','删除当前 UUID']]:[['disable','停用当前 UUID'],['enable','启用当前 UUID']])select.add(new Option(label,value));cancel.type='button';actions.append(cancel,save);body.append(select,preview,actions);
-  let live=true;const m=UI.modal(action==='delete'?'删除节点':'启用 / 停用 UUID',body,{trigger,onClose:()=>live=false});editor=m;cancel.onclick=()=>m.close();
+  const body=node('form','control-body'),select=node('select'),preview=node('p','notice'),save=node('button','primary','配置预览'),cancel=node('button','','取消'),actions=node('div','row-actions');
+  for(const [value,label]of [['disable','停用当前 UUID'],['enable','启用当前 UUID']])select.add(new Option(label,value));cancel.type='button';actions.append(cancel,save);body.append(select,preview,actions);
+  let live=true;const m=UI.modal('启用 / 停用 UUID',body,{trigger,onClose:()=>live=false});editor=m;cancel.onclick=()=>m.close();
   body.onsubmit=async e=>{e.preventDefault();if(save.disabled)return;save.disabled=true;
    try{const g=await gate(id);let p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!live)return;text(preview,p.reason||p.impact);if(!p.writable)throw Error(p.reason||'配置写入条件未满足');
-    if(!p.effects)throw Error('缺少影响预览');if(!await UI.confirm(action==='delete'?'确认删除节点':'确认应用',confirmationText(r,p.effects,select.selectedOptions[0].text),action==='delete'?'删除节点':'确认应用',{onConfirm:async()=>{
+    if(!p.effects)throw Error('缺少影响预览');if(!await UI.confirm('确认应用',confirmationText(r,p.effects,select.selectedOptions[0].text),'确认应用',{onConfirm:async()=>{
      if(!live)throw Error('操作已关闭，请重新预览');if(!p){const g=await gate(id);p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!p.writable||!p.effects)throw Error(p.reason||'缺少影响预览')}
      const nonce=p.nonce;p=null;await api('control/apply','POST',{node_id:id,nonce});
     }}))return;
-    if(live){m.force();UI.notify(action==='delete'?'节点已删除':'节点配置已应用');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('操作已生效；刷新失败：'+e.message,'error')}}
+    if(live){m.force();UI.notify('节点配置已应用');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('操作已生效；刷新失败：'+e.message,'error')}}
    }catch(err){if(live){text(preview,'');UI.notify(err.message,'error')}}finally{if(live)save.disabled=false}
   };
  }
