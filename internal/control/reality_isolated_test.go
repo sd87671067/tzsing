@@ -1,11 +1,13 @@
 package control
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"golang.org/x/net/proxy"
 	"io"
 	"net"
@@ -31,6 +33,8 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 	if binary == "" {
 		t.Skip("explicit isolated binary required")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
 	dir := t.TempDir()
 	shared, upstream, ca, cb := 443, freePort(t), freePort(t), freePort(t)
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +74,7 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 		if e := os.WriteFile(p, b, 0600); e != nil {
 			return e
 		}
-		cmd := exec.Command(binary, "check", "-c", p)
+		cmd := exec.CommandContext(ctx, binary, "check", "-c", p)
 		if out, e := cmd.CombinedOutput(); e != nil {
 			return errors.New(string(out))
 		}
@@ -82,7 +86,20 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 	start := func(name string, c map[string]any) {
 		p := filepath.Join(dir, name+".json")
 		os.WriteFile(p, canonical(c), 0600)
-		cmd := exec.Command(binary, "run", "-c", p)
+		cmd := exec.CommandContext(ctx, binary, "run", "-c", p)
+		log, err := os.Create(filepath.Join(dir, name+".log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd.Stdout = log
+		cmd.Stderr = log
+		t.Cleanup(func() {
+			log.Close()
+			if t.Failed() {
+				b, _ := os.ReadFile(log.Name())
+				t.Log(name, string(b))
+			}
+		})
 		if e := cmd.Start(); e != nil {
 			t.Fatal(e)
 		}
@@ -110,7 +127,9 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 			failRestart = false
 			return errors.New("injected restart failure")
 		}
-		current = exec.Command(binary, "run", "-c", path)
+		current = exec.CommandContext(ctx, binary, "run", "-c", path)
+		current.Stdout = os.Stderr
+		current.Stderr = os.Stderr
 		return current.Start()
 	}
 	defer func() {
@@ -126,7 +145,7 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 		}
 		tr := &http.Transport{DialContext: d.(proxy.ContextDialer).DialContext}
 		defer tr.CloseIdleConnections()
-		res, e := (&http.Client{Transport: tr, Timeout: 500 * time.Millisecond}).Get(web.URL)
+		res, e := (&http.Client{Transport: tr, Timeout: 2 * time.Second}).Get(web.URL)
 		if e != nil {
 			return "", e
 		}
@@ -135,15 +154,17 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 		return string(b), e
 	}
 	wait := func(port int, want string) error {
-		until := time.Now().Add(4 * time.Second)
+		until := time.Now().Add(8 * time.Second)
+		var last string
 		for time.Now().Before(until) {
 			s, e := request(port)
+			last = fmt.Sprintf("body=%q err=%v", s, e)
 			if e == nil && s == want {
 				return nil
 			}
 			time.Sleep(30 * time.Millisecond)
 		}
-		return errors.New("isolated path did not match " + want)
+		return errors.New("isolated path did not match " + want + ": " + last)
 	}
 	healthy := func(config map[string]any) error {
 		if failHealth && activations == healthActivation {
@@ -336,10 +357,13 @@ func TestIsolatedRealityCreateShared443AndRollback(t *testing.T) {
 	fresh := "33333333-3333-4333-8333-333333333333"
 	preview := call("/uuid-preview", map[string]any{"node": UUIDNodeRequest{Inbound: "shared", Name: "new", UUID: fresh, Outbound: "direct", Enabled: true}})
 	call("/uuid-apply", map[string]any{"plan": preview["plan"]})
+	beforeReplay, _ := os.ReadFile(path)
+	replayActivations := activations
 	replay := httptest.NewRecorder()
 	c.ServeHTTP(replay, httptest.NewRequest("POST", "/uuid-apply", strings.NewReader(string(canonical(map[string]any{"plan": preview["plan"]})))))
-	if replay.Code != 409 {
-		t.Fatal("create token replay")
+	afterReplay, _ := os.ReadFile(path)
+	if replay.Code != 200 || candidateMap(replay.Body.Bytes())["state"] != "succeeded" || digest(beforeReplay) != digest(afterReplay) || activations != replayActivations {
+		t.Fatal("idempotent create replay changed configuration or service", replay.Code, replay.Body.String())
 	}
 	afterCreate, _ := os.ReadFile(path)
 	if !reflect.DeepEqual(findInbound(candidateMap(beforeCreate), "shared")["tls"], findInbound(candidateMap(afterCreate), "shared")["tls"]) {

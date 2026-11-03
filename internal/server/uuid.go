@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"time"
 	"tzsingbox/internal/auth"
 	"tzsingbox/internal/control"
@@ -18,6 +19,14 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 	}
 	if a.ControlSocket == "" {
 		reply(w, 503, map[string]string{"error": "受限控制服务未配置"})
+		return
+	}
+	if path == "node-transaction" {
+		if r.Method != "GET" {
+			fail(w, 405)
+			return
+		}
+		a.uuidOperationStatus(w, r, u)
 		return
 	}
 	if path == "node-catalog" {
@@ -70,8 +79,10 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 		out, status := a.hostControl(r.Context(), "uuid-preview", map[string]any{"node": v.Node})
 		if status == 200 {
 			plan, _ := out["plan"].(string)
+			identity, _ := out["auth_id"].(string)
 			delete(out, "plan")
-			if plan == "" {
+			delete(out, "auth_id")
+			if plan == "" || !model.ValidAuthID(identity) {
 				fail(w, 502)
 				return
 			}
@@ -90,11 +101,29 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 				fail(w, 429)
 				return
 			}
-			a.controlNonces[auth.Digest(token)] = controlNonce{Session: auth.Digest(cookie.Value), User: u.ID, Node: v.Node.Name, Plan: plan, Action: "create", Expires: time.Now().Add(2 * time.Minute)}
+			a.controlNonces[auth.Digest(token)] = controlNonce{Session: auth.Digest(cookie.Value), User: u.ID, IdentityTag: model.IdentityName(v.Node.Inbound, identity), Node: strings.TrimSpace(v.Node.Name), Plan: plan, Action: "create", Expires: time.Now().Add(2 * time.Minute)}
 			a.mu.Unlock()
 			out["nonce"] = token
 		}
 		reply(w, status, out)
+		return
+	}
+	a.uuidMu.Lock()
+	defer a.uuidMu.Unlock()
+	// Check durable idempotency before consuming the in-memory confirmation.
+	id := auth.Digest(v.Nonce)
+	if v.Nonce == "" {
+		fail(w, 400)
+		return
+	}
+	var owner int64
+	if a.DB.QueryRow("SELECT user_id FROM uuid_operations WHERE id=?", id).Scan(&owner) == nil {
+		if owner != u.ID {
+			fail(w, 403)
+			return
+		}
+		a.startUUIDOperation(id)
+		reply(w, 202, map[string]any{"transaction_id": v.Nonce, "state": "pending"})
 		return
 	}
 	a.mu.Lock()
@@ -105,19 +134,28 @@ func (a *App) uuidAdmin(w http.ResponseWriter, r *http.Request, u store.User, pa
 		fail(w, 409)
 		return
 	}
-	out, status := a.hostControl(r.Context(), "uuid-apply", map[string]string{"plan": n.Plan})
-	if status == 200 {
-		tag := model.IdentityName(out["inbound"].(string), out["auth_id"].(string))
-		// Config is authoritative. Alias persistence failure must not claim rollback.
-		_, err := a.DB.Exec("INSERT INTO nodes(id,server,tag,name) VALUES(?,?,?,?) ON CONFLICT(server,tag) DO UPDATE SET name=excluded.name", auth.Random(), a.ControlServer, tag, n.Node)
-		if err != nil {
-			out["warning"] = "节点已生效，显示名称保存失败；请重命名"
-		}
+	if !strings.HasPrefix(n.IdentityTag, "identity:") {
+		fail(w, 502)
+		return
 	}
-	event := "failed"
-	if status == 200 {
-		event = "applied"
+	tx, e := a.DB.Begin()
+	if e != nil {
+		fail(w, 500)
+		return
 	}
-	a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "uuid_create_"+event)
-	reply(w, status, out)
+	defer tx.Rollback()
+	if _, e = tx.Exec("INSERT INTO uuid_operations(id,user_id,server,plan,name,tag,created) VALUES(?,?,?,?,?,?,?)", id, u.ID, a.ControlServer, n.Plan, n.Node, n.IdentityTag, time.Now().Unix()); e != nil {
+		fail(w, 500)
+		return
+	}
+	if _, e = tx.Exec("INSERT INTO nodes(id,server,tag,name) VALUES(?,?,?,?) ON CONFLICT(server,tag) DO UPDATE SET name=CASE WHEN nodes.name='' THEN excluded.name ELSE nodes.name END", auth.Random(), a.ControlServer, n.IdentityTag, n.Node); e != nil {
+		fail(w, 500)
+		return
+	}
+	if e = tx.Commit(); e != nil {
+		fail(w, 500)
+		return
+	}
+	a.startUUIDOperation(id)
+	reply(w, 202, map[string]any{"transaction_id": v.Nonce, "state": "pending"})
 }

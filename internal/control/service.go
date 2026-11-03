@@ -38,6 +38,7 @@ type ServiceConfig struct {
 	Endpoints      map[string]Endpoint `json:"endpoints"`
 }
 type plan struct {
+	UUIDOperation                     string
 	Policy                            *policy.Limit
 	Hash, Tag                         string
 	AuthID, Action                    string
@@ -94,13 +95,14 @@ type serviceRequest struct {
 	Label        string               `json:"label"`
 }
 type transaction struct {
-	Hash      string              `json:"hash"`
-	After     string              `json:"after"`
-	Before    []byte              `json:"before"`
-	FWAdded   []string            `json:"fw_added,omitempty"`
-	HapBefore []byte              `json:"hap_before,omitempty"`
-	HapAfter  []byte              `json:"hap_after,omitempty"`
-	Journals  map[string]Snapshot `json:"journals"`
+	UUIDOperation string              `json:"uuid_operation,omitempty"`
+	Hash          string              `json:"hash"`
+	After         string              `json:"after"`
+	Before        []byte              `json:"before"`
+	FWAdded       []string            `json:"fw_added,omitempty"`
+	HapBefore     []byte              `json:"hap_before,omitempty"`
+	HapAfter      []byte              `json:"hap_after,omitempty"`
+	Journals      map[string]Snapshot `json:"journals"`
 }
 
 func atomicFile(path string, b []byte, mode os.FileMode) error {
@@ -330,7 +332,7 @@ func (c *Controller) apply(p plan) error {
 	if e != nil {
 		return e
 	}
-	before := transaction{FWAdded: fwAdded, HapBefore: hapBefore, HapAfter: hapAfter, Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
+	before := transaction{UUIDOperation: p.UUIDOperation, FWAdded: fwAdded, HapBefore: hapBefore, HapAfter: hapAfter, Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
 	backup := filepath.Join(c.Config.State, "backup-"+time.Now().UTC().Format("20060102T150405.000000000")+"-"+before.Hash[:12]+".json")
 	if e = atomicFile(backup, raw, 0600); e != nil {
 		return e
@@ -489,6 +491,11 @@ func (c *Controller) apply(p plan) error {
 	if e = atomicFile(filepath.Join(c.Config.State, "snapshots.json"), canonical(journals), 0600); e != nil {
 		return rollback(errors.New("恢复快照持久化失败"))
 	}
+	if p.UUIDOperation != "" {
+		if e = c.saveUUIDResult(p.UUIDOperation, uuidResult{State: "succeeded", OK: true, Inbound: p.Tag, AuthID: p.AuthID}); e != nil {
+			return rollback(errors.New("创建结果持久化失败"))
+		}
+	}
 	os.Remove(txPath)
 	c.audit("applied", p.Tag)
 	return nil
@@ -530,8 +537,31 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.inspect(w, r, v)
 		return
 	}
+	// Receipt reads never wait behind a restart or depend on the browser request.
+	if r.URL.Path == "/uuid-result" {
+		result, err := c.loadUUIDResult(auth.Digest(v.Plan))
+		if err != nil {
+			if os.IsNotExist(err) {
+				fail(404, "事务尚未被控制器接受")
+			} else {
+				fail(503, "事务记录不可读；请检查控制器状态")
+			}
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if r.URL.Path == "/uuid-apply" {
+		if result, err := c.loadUUIDResult(auth.Digest(v.Plan)); err == nil {
+			json.NewEncoder(w).Encode(result)
+			return
+		} else if !os.IsNotExist(err) {
+			fail(503, "事务记录不可读，禁止重放")
+			return
+		}
+	}
 	lock, e := os.OpenFile(filepath.Join(c.Config.State, "apply.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
 		fail(503, "控制锁不可用")
@@ -635,7 +665,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		id := auth.Random()
 		authID := text(summary["auth_id"])
-		delete(summary, "auth_id")
+		summary["inbound"] = v.Node.Inbound
 		c.plans[auth.Digest(id)] = plan{Base: append([]byte(nil), raw...), Hash: digest(raw), Tag: v.Node.Inbound, AuthID: authID, Action: "create", Policy: &policy.Limit{Quota: v.Node.Quota, ExpiresAt: v.Node.ExpiresAt, BillingDay: v.Node.BillingDay, Timezone: v.Node.Timezone}, Candidate: candidate, Expires: time.Now().Add(2 * time.Minute)}
 		summary["plan"] = id
 		summary["writable"] = writeEnabled
@@ -657,6 +687,24 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(409, "确认过期或已使用")
 			return
 		}
+		p.UUIDOperation = key
+		if e = c.saveUUIDResult(key, uuidResult{State: "running", Inbound: p.Tag, AuthID: p.AuthID}); e != nil {
+			fail(503, "事务记录不可写")
+			return
+		}
+		// Failures before/after rollback are durable too. An unresolved journal
+		// means manual recovery, never an instruction to retry the mutation.
+		completed := false
+		failure := "配置未确认成功；请查看控制器审计与恢复状态"
+		defer func() {
+			if !completed {
+				state := "failed"
+				if _, err := os.Stat(filepath.Join(c.Config.State, "transaction.json")); err == nil {
+					state = "uncertain"
+				}
+				c.saveUUIDResult(key, uuidResult{State: state, Inbound: p.Tag, AuthID: p.AuthID, Error: failure})
+			}
+		}()
 		var ledger *policy.Ledger
 		var user string
 		if p.Policy != nil && (p.Policy.Quota != 0 || p.Policy.ExpiresAt != 0) {
@@ -682,13 +730,15 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := c.apply(p); err != nil {
+			failure = err.Error()
 			if ledger != nil {
 				ledger.Remove(p.Tag, user)
 			}
 			fail(409, err.Error())
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "auth_id": p.AuthID, "inbound": p.Tag})
+		completed = true
+		json.NewEncoder(w).Encode(uuidResult{State: "succeeded", OK: true, AuthID: p.AuthID, Inbound: p.Tag})
 		return
 	}
 	in := findInbound(config, v.Tag)
@@ -934,16 +984,24 @@ func RunController(ctx context.Context, path string) error {
 		if err != nil || (digest(current) != tx.After && digest(current) != tx.Hash) {
 			return errors.New("中断事务与外部配置冲突；保留备份，禁止自动覆盖")
 		}
-		var original map[string]any
-		json.Unmarshal(tx.Before, &original)
-		if c.rollbackFirewall(tx.FWAdded) != nil || c.restoreHaproxy(tx.HapAfter, tx.HapBefore) != nil || c.check(tx.Before) != nil || atomicFile(cfg.Config, tx.Before, 0600) != nil || c.activate() != nil || c.healthy(original) != nil {
-			return errors.New("中断事务恢复失败")
+		receipt, receiptErr := c.loadUUIDResult(tx.UUIDOperation)
+		if tx.UUIDOperation != "" && receiptErr == nil && receipt.State == "succeeded" && digest(current) == tx.After {
+			os.Remove(txPath)
+		} else {
+			var original map[string]any
+			json.Unmarshal(tx.Before, &original)
+			if c.rollbackFirewall(tx.FWAdded) != nil || c.restoreHaproxy(tx.HapAfter, tx.HapBefore) != nil || c.check(tx.Before) != nil || atomicFile(cfg.Config, tx.Before, 0600) != nil || c.activate() != nil || c.healthy(original) != nil {
+				return errors.New("中断事务恢复失败")
+			}
+			if atomicFile(filepath.Join(cfg.State, "snapshots.json"), canonical(tx.Journals), 0600) != nil {
+				return errors.New("中断事务快照恢复失败")
+			}
+			os.Remove(txPath)
+			c.audit("interrupted_transaction_recovered", "")
 		}
-		if atomicFile(filepath.Join(cfg.State, "snapshots.json"), canonical(tx.Journals), 0600) != nil {
-			return errors.New("中断事务快照恢复失败")
-		}
-		os.Remove(txPath)
-		c.audit("interrupted_transaction_recovered", "")
+	}
+	if e := c.recoverUUIDResults(); e != nil {
+		return e
 	}
 	if e = os.MkdirAll(filepath.Dir(cfg.Socket), 0750); e != nil {
 		return e

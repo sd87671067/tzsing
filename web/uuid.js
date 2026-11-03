@@ -1,12 +1,42 @@
 'use strict';
 // Reuse console controls, tokens, modal lifecycle and Toast.
 const UUIDEditor=(()=>{
- let form=null,revision=0;
+ let form=null,revision=0,timer=null,checking=false,until=0;
+ const key=()=>prefix+':uuid-operation:'+me?.id;
+ function pending(){try{return JSON.parse(localStorage.getItem(key())||'null')}catch{return null}}
+ async function bounded(path,method='GET',body){return api(path,method,body,{signal:AbortSignal.timeout(8000)})}
+ function pause(){clearTimeout(timer);timer=null;until=0}
+ function resume(){if(me?.role!=='admin'||!pending())return;if(!until)until=Date.now()+180000;check()}
+ async function check(){
+  if(checking||me?.role!=='admin')return;const op=pending(),storageKey=key();if(!op)return;checking=true;clearTimeout(timer);
+  try{
+   let result;
+   try{result=await bounded('admin/node-transaction?id='+encodeURIComponent(op.id))}catch(e){
+    if(e.status!==404)throw e;
+    // Replay only the exact confirmation ID, never preview/generate another UUID.
+    await bounded('admin/node-create','POST',{server:op.server,nonce:op.id});
+    return;
+   }
+   if(storageKey!==key()||me?.role!=='admin')return;
+   if(result.state==='succeeded'||result.state==='failed'){
+    localStorage.removeItem(key());until=0;
+    UI.notify(result.state==='succeeded'?'UUID 节点已添加，名称已保存':result.error||'添加未生效，已结束事务',result.state==='succeeded'?'success':'error');
+    await bounded('snapshot').then(update);if(currentPage==='add-node')navigate('overview');return;
+   }
+   if(result.state==='uncertain'){until=0;UI.notify('需要管理员检查控制器恢复状态；原事务已保留，请勿重复添加','error');return}
+  }catch(e){if(e.status===401||e.status===403){pause();return}if(e.status===409||e.status===422){localStorage.removeItem(key());until=0;UI.notify(e.message,'error');return}}
+  finally{
+   checking=false;
+   if(storageKey===key()&&pending()&&until){if(Date.now()<until)timer=setTimeout(check,2500);else{until=0;UI.notify('结果确认超时，原事务已保留；恢复网络后自动查询，请勿重复添加','error')}}
+  }
+ }
+ window.addEventListener('online',resume);
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)resume()});
  function clear(){revision++;if(form)form.reset();form=null;document.querySelector('#uuid-editor').replaceChildren()}
  async function load(){
-  clear();const rev=revision,host=document.querySelector('#uuid-editor');host.append(UI.make('p','muted','正在读取现有监听器…'));
+  clear();const rev=revision,host=document.querySelector('#uuid-editor');if(pending()){const b=UI.make('button','','查询原添加事务');b.onclick=resume;host.append(UI.make('p','notice','已有 UUID 添加事务等待确认，请勿重复提交。'),b);resume();return}host.append(UI.make('p','muted','正在读取现有监听器…'));
   try{
-   const c=await api('admin/node-catalog');if(rev!==revision||me?.role!=='admin')return;host.replaceChildren();
+   const c=await bounded('admin/node-catalog');if(rev!==revision||me?.role!=='admin')return;host.replaceChildren();
    const f=UI.make('form','uuid-form');form=f;
    function group(title){const fieldset=UI.make('fieldset','uuid-group');fieldset.append(UI.make('legend','',title));f.append(fieldset);return fieldset}
    function add(group,key,label,type='text',value='',disabled=false){const l=UI.make('label','',label),input=UI.make(type==='select'?'select':'input');input.name=key;if(type!=='select')input.type=type;input.value=value;input.disabled=disabled;l.append(input);group.append(l);return input}
@@ -37,22 +67,27 @@ const UUIDEditor=(()=>{
     const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim(),controls=[...f.querySelectorAll('input,select,button')].filter(x=>x!==preview).map(x=>[x,x.disabled]);controls.forEach(([x])=>x.disabled=true);
     try{
      const request={server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}};
-     let summary=await api('admin/node-preview','POST',request),result;
+     let summary=await bounded('admin/node-preview','POST',request),result;
      if(rev!==revision||me?.role!=='admin')return;
      if(!summary.writable)throw Error(summary.reason||c.reason||'生产写入未启用');
      const description='名称：'+nodeName+'\n入站：'+inbound.value+' · '+routeLabel+'\n共享 443、REALITY 密钥和握手配置保持现有值。\n将重启整个 sing-box，所有共享连接可能中断；失败自动回滚。\n'+summary.reason;
      if(!await UI.confirm('确认添加 UUID 节点',description,'确认应用',{onConfirm:async()=>{
-      if(!summary)summary=await api('admin/node-preview','POST',request);
+      if(!summary)summary=await bounded('admin/node-preview','POST',request);
       if(!summary.writable)throw Error(summary.reason||'生产写入未启用');
       const nonce=summary.nonce;summary=null;
-      result=await api('admin/node-create','POST',{server:request.server,nonce});
-      if(!result.ok)throw Error('执行器未确认 UUID 创建，请刷新后核实');
+      localStorage.setItem(key(),JSON.stringify({id:nonce,server:request.server}));
+      // The confirmation closes promptly even when the proxy drops its response.
+      try{result=await bounded('admin/node-create','POST',{server:request.server,nonce})}catch(e){
+       if(e.status&&e.status<500){localStorage.removeItem(key());throw e}
+       result={state:'pending'};
+      }
+      resume();
      }}))return;
-     if(rev!==revision)return;uuid.value='';UI.notify(result.warning||'UUID 节点已添加并通过健康验证');navigate('overview');
+     if(rev!==revision)return;uuid.value='';UI.notify('添加事务已提交，正在确认配置应用结果');navigate('overview');
 
     }catch(e){if(rev===revision)UI.notify(e.message,'error')}finally{controls.forEach(([x,disabled])=>x.disabled=disabled);preview.disabled=false}
    };
   }catch(e){if(rev===revision)host.replaceChildren(UI.make('p','notice',e.message))}
  }
- return {load,clear};
+ return {load,clear,resume,pause};
 })();

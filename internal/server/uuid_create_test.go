@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestUUIDCreateSessionPermissionNonceAndAlias(t *testing.T) {
@@ -19,12 +20,12 @@ func TestUUIDCreateSessionPermissionNonceAndAlias(t *testing.T) {
 	var applied atomic.Int64
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/uuid-preview" {
-			w.Write([]byte(`{"plan":"hidden-plan","writable":true}`))
+			w.Write([]byte(`{"plan":"hidden-plan","writable":true,"auth_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 			return
 		}
 		if r.URL.Path == "/uuid-apply" {
 			applied.Add(1)
-			w.Write([]byte(`{"ok":true,"auth_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inbound":"shared"}`))
+			w.Write([]byte(`{"state":"succeeded","ok":true,"auth_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inbound":"shared"}`))
 			return
 		}
 		w.WriteHeader(404)
@@ -53,12 +54,16 @@ func TestUUIDCreateSessionPermissionNonceAndAlias(t *testing.T) {
 		cookie *http.Cookie
 		csrf   string
 		want   int
-	}{{f.user, f.ucs, 403}, {f.admin, "", 403}, {f.admin, f.acs, 200}, {f.admin, f.acs, 409}} {
+	}{{f.user, f.ucs, 403}, {f.admin, "", 403}, {f.admin, f.acs, 202}, {f.admin, f.acs, 202}} {
 		r := f.req(t, "POST", "/api/admin/node-create", body, test.cookie, test.csrf)
 		r.Body.Close()
 		if r.StatusCode != test.want {
 			t.Fatal("create gate", r.StatusCode, test.want)
 		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for applied.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if applied.Load() != 1 {
 		t.Fatal("apply replayed")

@@ -52,6 +52,8 @@ type App struct {
 	ControlSocket  string
 	ControlServer  string
 	controlNonces  map[string]controlNonce
+	uuidJobs       map[string]bool
+	uuidMu         sync.Mutex
 	dummy          string
 }
 
@@ -465,7 +467,7 @@ func (a *App) admin(w http.ResponseWriter, r *http.Request, u store.User, path s
 	case "outbounds":
 		a.outboundAdmin(w, r, u)
 		return
-	case "node-catalog", "node-preview", "node-create", "node-delete", "node-state":
+	case "node-catalog", "node-preview", "node-create", "node-transaction", "node-delete", "node-state":
 		a.uuidAdmin(w, r, u, path)
 		return
 	}
