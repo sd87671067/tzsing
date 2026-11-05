@@ -6,11 +6,14 @@ import (
 	"strings"
 	"tzsingbox/internal/model"
 	"tzsingbox/policy"
+	"unicode"
+	"unicode/utf8"
 )
 
 // UUIDCandidate never edits a file or starts a process. The controller validates
 // its candidate and binds it to a short-lived, single-use application plan.
 type UUIDNodeRequest struct {
+	AuthName      string `json:"auth_name,omitempty"`
 	Inbound       string `json:"inbound"`
 	Name          string `json:"name"`
 	UUID          string `json:"uuid,omitempty"`
@@ -111,10 +114,21 @@ func UUIDCandidate(raw []byte, req UUIDNodeRequest) ([]byte, map[string]any, err
 	}
 	// Use a generated unique authentication name, never the editable display name.
 	authName := "tz-" + model.UUIDAuthID(req.UUID)[:32]
+	if req.AuthName != "" {
+		authName = strings.TrimSpace(req.AuthName)
+		if authName == "" || len([]rune(authName)) > 128 || !utf8.ValidString(authName) {
+			return nil, nil, fmt.Errorf("NAME 必须为 1–128 个有效字符")
+		}
+		for _, r := range authName {
+			if unicode.IsControl(r) {
+				return nil, nil, fmt.Errorf("NAME 不能包含控制字符")
+			}
+		}
+	}
 	for _, v := range array(config["inbounds"]) {
 		for _, u := range array(object(v)["users"]) {
 			if text(object(u)["name"]) == authName {
-				return nil, nil, ErrScope
+				return nil, nil, fmt.Errorf("NAME 已存在；不会覆盖已有认证名称")
 			}
 		}
 	}

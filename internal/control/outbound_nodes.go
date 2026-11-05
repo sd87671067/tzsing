@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -15,9 +16,10 @@ import (
 // OutboundNodeRequest is accepted only across the authenticated Unix socket.
 // No response ever contains the submitted link or proxy credentials.
 type OutboundNodeRequest struct {
-	Tag    string         `json:"tag"`
-	Link   string         `json:"link"`
-	Config map[string]any `json:"config"`
+	CreateTag string         `json:"create_tag,omitempty"`
+	Tag       string         `json:"tag"`
+	Link      string         `json:"link"`
+	Config    map[string]any `json:"config"`
 }
 
 func outboundRefs(config map[string]any, tag string) []string {
@@ -147,7 +149,37 @@ func outboundCandidate(raw []byte, v OutboundNodeRequest, action string) ([]byte
 		return configBytes(config), nil, nil
 	}
 	tag := v.Tag
-	if tag == "" {
+	if v.CreateTag != "" {
+		if tag != "" || !regexp.MustCompile(`^[a-zA-Z0-9_.@:-]{1,128}$`).MatchString(v.CreateTag) {
+			return nil, nil, fmt.Errorf("TAG 只能包含 1–128 个字母、数字或 _ . @ : -，且不能用于覆盖已有出站")
+		}
+		// Include inbound, endpoint and DNS tags: never silently shadow an identity.
+		var conflict func(any) bool
+		conflict = func(v any) bool {
+			switch x := v.(type) {
+			case map[string]any:
+				for k, v := range x {
+					if k == "tag" && text(v) == tag {
+						return true
+					}
+					if conflict(v) {
+						return true
+					}
+				}
+			case []any:
+				for _, v := range x {
+					if conflict(v) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		tag = v.CreateTag
+		if conflict(config) {
+			return nil, nil, fmt.Errorf("TAG 已存在或与现有配置冲突")
+		}
+	} else if tag == "" {
 		tag = "tz-out-" + auth.Random()[:16]
 	} else if old == nil {
 		return nil, nil, ErrScope
@@ -334,13 +366,7 @@ func (c *Controller) outboundNodes(w http.ResponseWriter, r *http.Request, v ser
 			fail(409, "确认过期或已使用")
 			return
 		}
-		if p.Snapshot.Outbound != nil {
-			if e := c.probe(p.Snapshot.Outbound); e != nil {
-				fail(422, e.Error())
-				return
-			}
-		}
-		if e := c.apply(p); e != nil {
+		if e := c.applyWithReceipt(p, v.Plan); e != nil {
 			fail(409, e.Error())
 			return
 		}

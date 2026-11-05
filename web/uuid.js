@@ -23,11 +23,11 @@ const UUIDEditor=(()=>{
     UI.notify(result.state==='succeeded'?'UUID 节点已添加，名称已保存':result.error||'添加未生效，已结束事务',result.state==='succeeded'?'success':'error');
     await bounded('snapshot').then(update);if(currentPage==='add-node')navigate('overview');return;
    }
-   if(result.state==='uncertain'){until=0;UI.notify('需要管理员检查控制器恢复状态；原事务已保留，请勿重复添加','error');return}
+   if(result.state==='uncertain'){until=0;UI.notify('正在确认：需要管理员检查控制器恢复状态；原事务已保留，请勿重复添加','info');return}
   }catch(e){if(e.status===401||e.status===403){pause();return}if(e.status===409||e.status===422){localStorage.removeItem(key());until=0;UI.notify(e.message,'error');return}}
   finally{
    checking=false;
-   if(storageKey===key()&&pending()&&until){if(Date.now()<until)timer=setTimeout(check,2500);else{until=0;UI.notify('结果确认超时，原事务已保留；恢复网络后自动查询，请勿重复添加','error')}}
+   if(storageKey===key()&&pending()&&until){if(Date.now()<until)timer=setTimeout(check,2500);else{until=0;UI.notify('正在确认：查询暂未完成，原事务已保留；恢复网络后自动查询，请勿重复添加','info')}}
   }
  }
  window.addEventListener('online',resume);
@@ -48,6 +48,8 @@ const UUIDEditor=(()=>{
    const server=add(basic,'server','所属服务器','select');server.add(new Option(c.server_id,c.server_id));
    const inbound=add(basic,'inbound','现有 VLESS REALITY 入站','select');for(const i of c.inbounds)inbound.add(new Option(i.tag+' · '+i.users+' 个 UUID',i.tag));inbound.required=true;
    const listener=UI.make('p','muted');basic.append(listener);
+   const authName=add(basic,'auth_name','NAME（可选，认证用户名称；与显示名称独立）');authName.maxLength=128;
+   basic.append(UI.make('p','muted','NAME 保存在现有用户身份 name 中，用于认证路由与计量；不更改共享入站 TAG。留空自动生成。'));
    const uuid=add(basic,'uuid','UUID（留空由 Go 安全生成）');uuid.autocomplete='off';uuid.spellcheck=false;uuid.maxLength=36;uuid.pattern='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
    const sni=add(basic,'sni','共享客户端 SNI（只读）','text','',true),handshake=add(basic,'handshake','共享服务端 REALITY 握手目标（只读）','text','',true);
    const describe=()=>{const i=c.inbounds.find(i=>i.tag===inbound.value);sni.value=i?.sni||'未配置';handshake.value=i?.handshake_server||'未配置';listener.textContent=i?'复用现有监听 '+i.port+'；外部 443 映射沿用现有部署，不创建端口。':'没有受支持的 REALITY 入站'};inbound.onchange=describe;describe();
@@ -66,7 +68,7 @@ const UUIDEditor=(()=>{
     e.preventDefault();if(preview.disabled||!f.reportValidity())return;preview.disabled=true;
     const routeLabel=outbound.selectedOptions[0]?.textContent||'未选择',nodeName=name.value.trim(),controls=[...f.querySelectorAll('input,select,button')].filter(x=>x!==preview).map(x=>[x,x.disabled]);controls.forEach(([x])=>x.disabled=true);
     try{
-     const request={server:server.value,node:{inbound:inbound.value,name:nodeName,uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}};
+     const request={server:server.value,node:{inbound:inbound.value,name:nodeName,auth_name:authName.value.trim(),uuid:uuid.value.trim(),outbound:outbound.value,enabled:enabled.checked,...limits.read()}};
      let summary=await bounded('admin/node-preview','POST',request),result;
      if(rev!==revision||me?.role!=='admin')return;
      if(!summary.writable)throw Error(summary.reason||c.reason||'生产写入未启用');

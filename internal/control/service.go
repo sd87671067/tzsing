@@ -38,6 +38,7 @@ type ServiceConfig struct {
 	Endpoints      map[string]Endpoint `json:"endpoints"`
 }
 type plan struct {
+	Operation                         string
 	UUIDOperation                     string
 	Policy                            *policy.Limit
 	Hash, Tag                         string
@@ -95,6 +96,7 @@ type serviceRequest struct {
 	Label        string               `json:"label"`
 }
 type transaction struct {
+	Operation     string              `json:"operation,omitempty"`
 	UUIDOperation string              `json:"uuid_operation,omitempty"`
 	Hash          string              `json:"hash"`
 	After         string              `json:"after"`
@@ -332,7 +334,7 @@ func (c *Controller) apply(p plan) error {
 	if e != nil {
 		return e
 	}
-	before := transaction{UUIDOperation: p.UUIDOperation, FWAdded: fwAdded, HapBefore: hapBefore, HapAfter: hapAfter, Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
+	before := transaction{Operation: p.Operation, UUIDOperation: p.UUIDOperation, FWAdded: fwAdded, HapBefore: hapBefore, HapAfter: hapAfter, Hash: digest(raw), After: digest(p.Candidate), Before: raw, Journals: oldJournals}
 	backup := filepath.Join(c.Config.State, "backup-"+time.Now().UTC().Format("20060102T150405.000000000")+"-"+before.Hash[:12]+".json")
 	if e = atomicFile(backup, raw, 0600); e != nil {
 		return e
@@ -491,6 +493,11 @@ func (c *Controller) apply(p plan) error {
 	if e = atomicFile(filepath.Join(c.Config.State, "snapshots.json"), canonical(journals), 0600); e != nil {
 		return rollback(errors.New("恢复快照持久化失败"))
 	}
+	if p.Operation != "" {
+		if e = c.saveApplyResult(p.Operation, applyResult{State: "succeeded", OK: true, Tag: p.Tag, IP: c.lastIP, Deleted: p.Action == "outbound-delete"}); e != nil {
+			return rollback(errors.New("应用结果持久化失败"))
+		}
+	}
 	if p.UUIDOperation != "" {
 		if e = c.saveUUIDResult(p.UUIDOperation, uuidResult{State: "succeeded", OK: true, Inbound: p.Tag, AuthID: p.AuthID}); e != nil {
 			return rollback(errors.New("创建结果持久化失败"))
@@ -537,6 +544,20 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.inspect(w, r, v)
 		return
 	}
+	// Reads bypass the mutation lock, including while sing-box is restarting.
+	if r.URL.Path == "/apply-result" {
+		result, err := c.loadApplyResult(auth.Digest(v.Plan))
+		if err != nil {
+			if os.IsNotExist(err) {
+				fail(404, "事务尚未被控制器接受")
+			} else {
+				fail(503, "事务记录不可读")
+			}
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+		return
+	}
 	// Receipt reads never wait behind a restart or depend on the browser request.
 	if r.URL.Path == "/uuid-result" {
 		result, err := c.loadUUIDResult(auth.Digest(v.Plan))
@@ -553,6 +574,15 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if r.URL.Path == "/apply" || r.URL.Path == "/outbound-apply" {
+		if result, err := c.loadApplyResult(auth.Digest(v.Plan)); err == nil {
+			json.NewEncoder(w).Encode(result)
+			return
+		} else if !os.IsNotExist(err) {
+			fail(503, "事务记录不可读，禁止重放")
+			return
+		}
+	}
 	if r.URL.Path == "/uuid-apply" {
 		if result, err := c.loadUUIDResult(auth.Digest(v.Plan)); err == nil {
 			json.NewEncoder(w).Encode(result)
@@ -934,7 +964,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(409, "确认已过期或被使用，请重新预览")
 			return
 		}
-		if e = c.apply(p); e != nil {
+		if e = c.applyWithReceipt(p, v.Plan); e != nil {
 			c.audit("apply_failed", v.Tag)
 			fail(409, e.Error())
 			return
@@ -985,7 +1015,9 @@ func RunController(ctx context.Context, path string) error {
 			return errors.New("中断事务与外部配置冲突；保留备份，禁止自动覆盖")
 		}
 		receipt, receiptErr := c.loadUUIDResult(tx.UUIDOperation)
-		if tx.UUIDOperation != "" && receiptErr == nil && receipt.State == "succeeded" && digest(current) == tx.After {
+		applied, appliedErr := c.loadApplyResult(tx.Operation)
+		committed := tx.UUIDOperation != "" && receiptErr == nil && receipt.State == "succeeded" || tx.Operation != "" && appliedErr == nil && applied.State == "succeeded"
+		if committed && digest(current) == tx.After {
 			os.Remove(txPath)
 		} else {
 			var original map[string]any
@@ -999,6 +1031,9 @@ func RunController(ctx context.Context, path string) error {
 			os.Remove(txPath)
 			c.audit("interrupted_transaction_recovered", "")
 		}
+	}
+	if e := c.recoverApplyResults(); e != nil {
+		return e
 	}
 	if e := c.recoverUUIDResults(); e != nil {
 		return e

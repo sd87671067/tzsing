@@ -159,7 +159,7 @@ func TestDeleteProtocolIdentityBoundaryAndAdminPermission(t *testing.T) {
 			}
 			p := call("POST", "preview", map[string]any{"node_id": "delete-target", "nonce": g["nonce"], "action": "delete"}, true, 200)
 			call("POST", "apply", map[string]any{"node_id": "delete-target", "nonce": p["nonce"]}, true, 200)
-			call("POST", "apply", map[string]any{"node_id": "delete-target", "nonce": p["nonce"]}, true, 409)
+			call("POST", "apply", map[string]any{"node_id": "delete-target", "nonce": p["nonce"]}, true, 200)
 			if applies != 1 {
 				t.Fatal("unexpected apply count", applies)
 			}

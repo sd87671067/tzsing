@@ -29,14 +29,14 @@ const NodeControl=(()=>{
   let live=true,nonce='',busy=false,editVersion='';key=id;const m=UI.modal(readOnly?'解析出站链接（只读）':restoreOnly?'恢复原始出站':'更换节点出站 IP',body,{trigger,dirty:()=>input.value!==''&&!busy,onClose:()=>{live=false;input.value='';nonce='';if(editor===m)editor=null;if(!menu&&!editor)key=null}});editor=m;
   try{const g=await gate(id);if(live){editVersion=g.edit_version||'';text(notice,g.reason);for(const o of g.outbounds||[])source.add(Object.assign(outboundOption(o,userChoice?(o.current?' · 当前出站':''):' · '+o.type),{selected:!!o.current}));if(userChoice)parse.disabled=!g.apply||!source.options.length}}catch(e){if(live)text(notice,e.message)}
   input.oninput=()=>{nonce='';apply.disabled=true;preview.replaceChildren()};source.onchange=()=>{input.disabled=!!source.value;input.oninput()};source.hidden=restoreOnly;
-  form.onsubmit=async e=>{e.preventDefault();if(busy||parse.disabled||(!restoreOnly&&!input.value&&!source.value))return;busy=true;parse.disabled=true;apply.disabled=true;nonce='';if(userChoice){source.disabled=true;try{const g=await gate(id);if(!live)return;if(!g.actions?.change||!g.apply)throw Error('无权更换出站');const p=await api('control/preview','POST',{node_id:id,outbound:source.value,nonce:g.nonce,edit_version:editVersion});if(!live)return;if(!p.writable||!p.effects)throw Error(p.reason||'配置写入条件未满足');if(!await UI.confirm('确认更换节点出站？',confirmationText(r,p.effects,source.selectedOptions[0].text),'确认应用'))return;if(!live)return;await api('control/apply','POST',{node_id:id,nonce:p.nonce});if(live){m.force();UI.notify('节点出站已更换')}}catch(err){if(live)UI.notify(err.message,'error')}finally{busy=false;if(live){parse.disabled=false;source.disabled=false}}return;}text(status,'解析与配置校验中；尚未检测连接或应用');preview.replaceChildren();try{
+  form.onsubmit=async e=>{e.preventDefault();if(busy||parse.disabled||(!restoreOnly&&!input.value&&!source.value))return;busy=true;parse.disabled=true;apply.disabled=true;nonce='';if(userChoice){source.disabled=true;try{const g=await gate(id);if(!live)return;if(!g.actions?.change||!g.apply)throw Error('无权更换出站');const p=await api('control/preview','POST',{node_id:id,outbound:source.value,nonce:g.nonce,edit_version:editVersion});if(!live)return;if(!p.writable||!p.effects)throw Error(p.reason||'配置写入条件未满足');if(!await UI.confirm('确认更换节点出站？',confirmationText(r,p.effects,source.selectedOptions[0].text),'确认应用'))return;if(!live)return;if(!await ConfigTransactions.submit('control/apply',{node_id:id,nonce:p.nonce},'节点出站已更换'))return;if(live){m.force();UI.notify('节点出站已更换')}}catch(err){if(live)UI.notify(err.message,'error')}finally{busy=false;if(live){parse.disabled=false;source.disabled=false}}return;}text(status,'解析与配置校验中；尚未检测连接或应用');preview.replaceChildren();try{
    const g=await gate(id);if(!live)return;const p=await api('control/'+(restoreOnly?'restore-preview':'preview'),'POST',{node_id:id,...(!restoreOnly?{link:source.value?'':input.value,outbound:source.value}:{}),nonce:g.nonce,edit_version:editVersion});if(!live)return;const v=p.preview||p;
    for(const [label,value]of [['协议',v.protocol],['目标（脱敏）',v.server],['端口',v.port],['传输',v.transport||'原配置'],['安全',v.security||'原配置'],['认证','已隐藏']])preview.append(node('dt','',label),node('dd','',value));
    preview.effects=p.effects;preview.change=source.value?source.selectedOptions[0].text:[v.protocol,v.server,v.port].filter(Boolean).join(' · ');nonce=p.nonce||'';apply.disabled=readOnly||!nonce||!(restoreOnly?g.restore:g.apply);text(status,p.impact||'离线预览完成；控制服务未配置，禁止应用。');if(!apply.disabled)UI.notify('预览已生成，请核对影响范围','info')
   }catch(err){if(live){text(status,'');UI.notify(err.message,'error')}}finally{busy=false;if(live)parse.disabled=false}};
   apply.onclick=async()=>{if(readOnly||busy||!nonce||!preview.effects)return;if(!await UI.confirm(restoreOnly?'确认恢复原始出站？':'确认更换节点出站？',confirmationText(r,preview.effects,restoreOnly?'恢复原始出站':'更换出站：'+preview.change),'确认应用'))return;if(!live)return;
    busy=true;apply.disabled=parse.disabled=true;input.disabled=true;const confirmation=nonce;nonce='';text(status,'正在检测、应用并校验，请勿重复提交…');
-   try{await api('control/'+(restoreOnly?'restore':'apply'),'POST',{node_id:id,nonce:confirmation});if(live){input.value='';text(status,restoreOnly?'已恢复原始配置并验证服务。':'配置已应用并通过实际路径检测。');UI.notify(restoreOnly?'原始出站已恢复':'节点出站已更换')}}catch(e){if(live){text(status,'');UI.notify(e.message,'error')}}finally{busy=false;if(live){parse.disabled=false;input.disabled=false}}
+   try{if(!await ConfigTransactions.submit('control/'+(restoreOnly?'restore':'apply'),{node_id:id,nonce:confirmation},restoreOnly?'原始出站已恢复':'节点出站已更换')){text(status,'正在确认原配置事务，请勿重复提交');return;}if(live){input.value='';text(status,restoreOnly?'已恢复原始配置并验证服务。':'配置已应用并通过实际路径检测。');UI.notify(restoreOnly?'原始出站已恢复':'节点出站已更换')}}catch(e){if(live){text(status,'');UI.notify(e.message,'error')}}finally{busy=false;if(live){parse.disabled=false;input.disabled=false}}
   };
  }
  async function rename(id,trigger){
@@ -86,8 +86,9 @@ const NodeControl=(()=>{
     const g=await gate(id);if(!g.delete)throw Error(g.delete_reason||g.reason||'目标当前不能安全删除');
     const p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:'delete'});
     if(!p.writable||!p.effects)throw Error(p.reason||'缺少可靠删除预览');
-    await api('control/apply','POST',{node_id:id,nonce:p.nonce});
+    if(!await ConfigTransactions.submit('control/apply',{node_id:id,nonce:p.nonce},'节点已删除'))return;
    }}))return;
+   if(ConfigTransactions.pending())return;
    UI.notify('节点已删除');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('删除已生效；刷新失败：'+e.message,'error')}
   }finally{deleting.delete(id);trigger?.focus()}
  }
@@ -101,8 +102,9 @@ const NodeControl=(()=>{
    try{const g=await gate(id);let p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!live)return;text(preview,p.reason||p.impact);if(!p.writable)throw Error(p.reason||'配置写入条件未满足');
     if(!p.effects)throw Error('缺少影响预览');if(!await UI.confirm('确认应用',confirmationText(r,p.effects,select.selectedOptions[0].text),'确认应用',{onConfirm:async()=>{
      if(!live)throw Error('操作已关闭，请重新预览');if(!p){const g=await gate(id);p=await api('control/preview','POST',{node_id:id,nonce:g.nonce,action:select.value});if(!p.writable||!p.effects)throw Error(p.reason||'缺少影响预览')}
-     const nonce=p.nonce;p=null;await api('control/apply','POST',{node_id:id,nonce});
+     const nonce=p.nonce;p=null;const result=await ConfigTransactions.submit('control/apply',{node_id:id,nonce},'节点配置已应用');if(!result)return;
     }}))return;
+    if(ConfigTransactions.pending())return;
     if(live){m.force();UI.notify('节点配置已应用');try{update(await api('snapshot'));if(currentPage==='nodes')await loadNodeAdmin()}catch(e){UI.notify('操作已生效；刷新失败：'+e.message,'error')}}
    }catch(err){if(live){text(preview,'');UI.notify(err.message,'error')}}finally{if(live)save.disabled=false}
   };
@@ -113,7 +115,7 @@ const NodeControl=(()=>{
   nameForm.onsubmit=async e=>{e.preventDefault();if(saveName.disabled)return;saveName.disabled=true;try{await api('admin/nodes','PATCH',{node_id:id,name:name.value});update(await api('snapshot'));UI.notify('名称已保存')}catch(e){UI.notify(e.message,'error')}finally{saveName.disabled=false}};
   let editVersion='';const routeForm=node('form'),outbound=node('select'),saveRoute=node('button','primary','保存出站绑定'),routeLabel=node('label','','当前出站');routeLabel.append(outbound);routeForm.append(routeLabel,saveRoute);host.append(routeForm);saveRoute.disabled=true;
   try{const g=await gate(id);editVersion=g.edit_version||'';for(const o of g.outbounds||[])outbound.add(outboundOption(o,' · '+o.type));outbound.value=r.t.egress;saveRoute.disabled=!g.apply||!outbound.options.length}catch(e){host.append(node('p','notice',e.message))}
-  routeForm.onsubmit=async e=>{e.preventDefault();if(saveRoute.disabled)return;saveRoute.disabled=true;try{const g=await gate(id),p=await api('control/preview','POST',{node_id:id,outbound:outbound.value,nonce:g.nonce,edit_version:editVersion});if(!p.writable||!p.effects)throw Error(p.reason||'绑定条件未满足');if(!await UI.confirm('确认更换出站',confirmationText(r,p.effects,'绑定：'+(outbound.selectedOptions[0]?.text||outbound.value)),'确认应用'))return;await api('control/apply','POST',{node_id:id,nonce:p.nonce});UI.notify('出站绑定已生效')}catch(e){UI.notify(e.message,'error')}finally{saveRoute.disabled=false}};
+  routeForm.onsubmit=async e=>{e.preventDefault();if(saveRoute.disabled)return;saveRoute.disabled=true;try{const g=await gate(id),p=await api('control/preview','POST',{node_id:id,outbound:outbound.value,nonce:g.nonce,edit_version:editVersion});if(!p.writable||!p.effects)throw Error(p.reason||'绑定条件未满足');if(!await UI.confirm('确认更换出站',confirmationText(r,p.effects,'绑定：'+(outbound.selectedOptions[0]?.text||outbound.value)),'确认应用'))return;if(!await ConfigTransactions.submit('control/apply',{node_id:id,nonce:p.nonce},'节点出站已更换'))return;UI.notify('出站绑定已生效')}catch(e){UI.notify(e.message,'error')}finally{saveRoute.disabled=false}};
   const tools=node('div','row-actions');for(const [title,fn]of [['月额度与到期时间',b=>policy(id,b)],['启用 / 停用',b=>mutate(id,b)],['恢复原出站',b=>edit(id,b,true)],['删除入站',b=>mutate(id,b,'delete')]]){const b=node('button','',title);b.type='button';b.onclick=()=>fn(b);tools.append(b)}host.append(tools);
  }
  return {show,reconcile,invalidate,mount};

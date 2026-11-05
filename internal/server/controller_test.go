@@ -117,8 +117,8 @@ func TestDedicatedControlPermissionsCSRFNonceAndCredentialBoundary(t *testing.T)
 	}
 	r = f.req(t, "POST", "/api/control/apply", map[string]string{"node_id": id, "nonce": preview["nonce"].(string)}, f.admin, f.acs)
 	r.Body.Close()
-	if r.StatusCode != 409 {
-		t.Fatal("apply replay")
+	if r.StatusCode != 200 {
+		t.Fatal("apply replay must return original outcome")
 	}
 	var count int
 	f.db.QueryRow("SELECT count(*) FROM audit WHERE event LIKE '%canary%'").Scan(&count)

@@ -55,7 +55,7 @@ func uuidTransactionFixture(t *testing.T, dropResponses ...bool) (*fixture, func
 		t.Fatal(e)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/uuid-apply" && len(dropResponses) > 0 && dropResponses[0] {
+		if (r.URL.Path == "/uuid-apply" || r.URL.Path == "/apply" || r.URL.Path == "/outbound-apply") && len(dropResponses) > 0 && dropResponses[0] {
 			recorder := httptest.NewRecorder()
 			ctrl.ServeHTTP(recorder, r)
 			report()
@@ -88,7 +88,7 @@ func TestUUIDTransactionNamesRediscoveryAndWebRestart(t *testing.T) {
 	defer ws.Close()
 	var tokens []string
 	for _, name := range []string{"ck", "second"} {
-		r := f.req(t, "POST", "/api/admin/node-preview", map[string]any{"server": "one", "node": control.UUIDNodeRequest{Inbound: "shared", Name: name, Enabled: true}}, f.admin, f.acs)
+		r := f.req(t, "POST", "/api/admin/node-preview", map[string]any{"server": "one", "node": control.UUIDNodeRequest{Inbound: "shared", Name: name, AuthName: "auth-" + name, Enabled: true}}, f.admin, f.acs)
 		var v map[string]any
 		json.NewDecoder(r.Body).Decode(&v)
 		r.Body.Close()
@@ -172,6 +172,17 @@ func TestUUIDTransactionNamesRediscoveryAndWebRestart(t *testing.T) {
 		for _, tag := range v.Report.Tags {
 			seen[tag.Name] = true
 		}
+	}
+	var latest []byte
+	f.db.QueryRow("SELECT report FROM servers WHERE id='one'").Scan(&latest)
+	var reportNames model.Report
+	json.Unmarshal(latest, &reportNames)
+	authNames := map[string]bool{}
+	for _, tag := range reportNames.Tags {
+		authNames[tag.AuthName] = true
+	}
+	if !authNames["auth-ck"] || !authNames["auth-second"] {
+		t.Fatal("authentication NAME lost on rediscovery", authNames)
 	}
 	if !seen["ck"] || !seen["second"] {
 		t.Fatal(seen)

@@ -1,0 +1,41 @@
+'use strict';
+const fs=require('fs'),assert=require('node:assert/strict'),{chromium,webkit}=require(process.env.PLAYWRIGHT_MODULE||'/root/tzsing-browser-tools/node_modules/playwright');
+const dir=process.env.TZSING_UUID_BROWSER_STAGE,cfg=JSON.parse(fs.readFileSync(dir+'/browser.json'));
+(async()=>{try{for(const [engine,type]of Object.entries({chromium,webkit}).filter(([k])=>!process.env.TZSING_BROWSER_ENGINE||k===process.env.TZSING_BROWSER_ENGINE))for(const width of (process.env.TZSING_BROWSER_WIDTH?[Number(process.env.TZSING_BROWSER_WIDTH)]:[390,1440])){
+ const browser=await type.launch({headless:true}),ctx=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width,height:900},isMobile:width<500,hasTouch:width<500}),p=await ctx.newPage();p.setDefaultTimeout(20000);const errors=[];p.on('pageerror',e=>errors.push(e.message));p.on('response',async r=>{if(r.status()>=400||r.url().includes('/node-preview'))console.log('http',r.status(),r.url().split('/api/')[1],await r.text().catch(()=>''))});console.log('start',engine,width);
+ try{
+  await p.goto(cfg.base+'/');await p.locator('#login-form [name=name]').fill('admin');await p.locator('#login-form [name=password]').fill(cfg.admin);await p.locator('#login-form button').click();await p.locator('#dashboard').waitFor({state:'visible'});
+  const tag='custom-'+engine+'-'+width,alias='显示 '+tag;let applies=0,queries=0;
+  await p.route('**/api/control/transaction?*',r=>{queries++;return queries<=2?r.fulfill({status:503,json:{error:'Injected disconnected status channel'}}):r.continue()});
+  await p.route('**/api/admin/outbounds',async r=>{const v=r.request().method()==='POST'?r.request().postDataJSON():{};if(v.action!=='apply')return r.continue();applies++;const response=await r.fetch();assert.equal(response.status(),200);assert.equal((await response.json()).state,'succeeded');await r.abort('connectionfailed')});
+  await p.evaluate(()=>navigate('add-outbound'));const form=p.locator('#outbound-editor form');await form.getByLabel('显示名称（留空使用真实 Tag）',{exact:true}).fill(alias);await form.getByLabel('TAG（可选，留空自动生成）',{exact:true}).fill(tag);await form.getByRole('button',{name:'保存出站节点',exact:true}).click();await p.getByRole('dialog',{name:'确认保存出站节点',exact:true}).getByRole('button',{name:'确认保存',exact:true}).click();
+  await p.waitForFunction(()=>ConfigTransactions.pending()&&!document.querySelector('dialog[open]'));assert.equal(await form.getByRole('button',{name:'保存出站节点',exact:true}).isDisabled(),false);
+  // The original request succeeded in the real fixture; status channels fail first.
+  await p.reload();await p.locator('#dashboard').waitFor({state:'visible'});await p.waitForFunction(()=>typeof ConfigTransactions!=='undefined'&&!ConfigTransactions.pending());assert.equal(applies,1);assert(queries>=3);
+  const catalog=await p.evaluate(()=>api('admin/outbounds'));assert(catalog.items.some(o=>o.tag===tag&&o.name===alias));
+  // Real route form, same durable protocol, HTTP response deliberately lost.
+  console.log('outbound recovered',engine,width);await p.unroute('**/api/admin/outbounds');let changes=0,changeDone;const changed=new Promise(resolve=>changeDone=resolve);
+  await p.route('**/api/control/apply',async r=>{changes++;const response=await r.fetch();assert.equal((await response.json()).state,'succeeded');await r.abort('connectionfailed');changeDone()});
+  await p.evaluate(async()=>{const id=[...rows].find(([,r])=>r.t.name==='original')[0];NodeControl.show(id,null)});
+  await p.getByRole('button',{name:'更换节点出站 IP',exact:true}).click();const edit=p.getByRole('dialog',{name:'更换节点出站 IP',exact:true});await edit.locator('form select').selectOption(tag);await edit.getByRole('button',{name:'解析预览',exact:true}).click();await edit.getByRole('button',{name:'确认更换',exact:true}).click();await p.getByRole('dialog',{name:'确认更换节点出站？',exact:true}).getByRole('button',{name:'确认应用',exact:true}).click();await changed;await p.waitForFunction(()=>!ConfigTransactions.pending());assert.equal(changes,1);assert.equal(await edit.getByRole('button',{name:'解析预览',exact:true}).isDisabled(),false);await p.evaluate(()=>UI.invalidate());await p.locator('dialog[open]').waitFor({state:'hidden'});console.log('route recovered',engine,width);
+  // NAME and alias remain separate across actual create, refresh and rediscovery.
+  await p.evaluate(()=>navigate('add-node'));const uf=p.locator('#uuid-editor form');await uf.locator('[name=name]').fill('别名 '+tag);await uf.locator('[name=auth_name]').fill('identity-'+tag);let creates=0,createDone;const created=new Promise(resolve=>createDone=resolve);
+  await p.route('**/api/admin/node-create',async r=>{creates++;const response=await r.fetch();assert.equal(response.status(),202);await r.abort('connectionfailed');createDone()});
+  await uf.getByRole('button',{name:'添加节点',exact:true}).click();await p.getByRole('dialog',{name:'确认添加 UUID 节点',exact:true}).getByRole('button',{name:'确认应用',exact:true}).click();await created;await p.waitForFunction(()=>!Object.keys(localStorage).some(k=>k.includes(':uuid-operation:')));await p.reload();await p.locator('#dashboard').waitFor({state:'visible'});await p.waitForFunction(name=>[...rows.values()].some(r=>r.t.name===name),'别名 '+tag);
+  const identity=await p.evaluate(name=>[...rows.values()].find(r=>r.t.name===name).t,'别名 '+tag);assert(identity.auth_id); assert.equal(identity.inbound_tag,'shared');assert.equal(creates,1);console.log('NAME recovered',engine,width);
+  // A real timeout after the config response completed must finish loading and query.
+  await p.unroute('**/api/control/apply');let timeouts=0;
+  await p.route('**/api/control/apply',async r=>{timeouts++;await r.fetch();await new Promise(resolve=>setTimeout(resolve,9000));try{await r.abort('timedout')}catch{}});
+  const originalID=await p.evaluate(()=>[...rows].find(([,r])=>r.t.name==='original')[0]);
+  const timed=await p.evaluate(async({id,tag})=>{const g=await api('control/status?node_id='+id),v=await api('control/preview','POST',{node_id:id,outbound:tag,nonce:g.nonce});return ConfigTransactions.submit('control/apply',{node_id:id,nonce:v.nonce},'timeout recovered')},{id:originalID,tag:'direct'});assert.equal(timed,null);await p.waitForFunction(()=>!ConfigTransactions.pending());assert.equal(timeouts,1);
+  // Unconfirmed and rollback outcomes are distinct from transport errors.
+  for(const state of ['pending','uncertain','failed']){
+   await p.route('**/api/control/transaction?*',r=>r.fulfill({json:{state,error:'Injected rollback verified'}}));
+   await p.evaluate(state=>{localStorage.setItem(prefix+':config-operation:'+me.id,JSON.stringify({path:'control/apply',body:{nonce:'synthetic-'+state},success:'synthetic'}));ConfigTransactions.resume()},state);
+   if(state==='failed')await p.waitForFunction(()=>!ConfigTransactions.pending());else{await p.waitForTimeout(100);assert(await p.evaluate(()=>!!ConfigTransactions.pending()));assert(await p.evaluate(()=>document.querySelectorAll('.toast-item[data-type=error]').length===0));await p.evaluate(()=>{ConfigTransactions.pause();localStorage.removeItem(prefix+':config-operation:'+me.id)})}
+   await p.unroute('**/api/control/transaction?*');
+  }
+  for(const theme of ['light','dark']){await p.evaluate(t=>document.documentElement.dataset.theme=t,theme);assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth))}
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({engine,width,tag,alias_persistent:true,auth_name_persistent:true,lost_response:true,route_recovered:true,timeout_recovered:true,loading_ended:true,apply_requests:applies,change_requests:changes,create_requests:creates,status_queries:queries,pending_uncertain_failed:true,exit_code:0}));
+ }catch(e){console.log('diagnostic',engine,width,await p.locator('body').innerText(),errors,await p.evaluate(()=>[...document.querySelectorAll('#uuid-editor input,#uuid-editor select,#uuid-editor button')].map(x=>({name:x.name,value:x.type==='password'?'':x.value,valid:x.validity?.valid,message:x.validationMessage,disabled:x.disabled}))));throw e}finally{await p.unrouteAll({behavior:'wait'});await ctx.close();await browser.close()}
+}}finally{fs.writeFileSync(dir+'/done','done')}})().catch(e=>{console.error(e);process.exitCode=1});

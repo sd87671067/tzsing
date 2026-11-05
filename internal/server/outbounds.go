@@ -113,6 +113,9 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 		return
 	}
 	if v.Action == "apply" {
+		if a.replayConfigOperation(w, r, u, v.Nonce, "outbound-apply", "") {
+			return
+		}
 		a.mu.Lock()
 		n, ok := a.controlNonces[auth.Digest(v.Nonce)]
 		delete(a.controlNonces, auth.Digest(v.Nonce))
@@ -121,23 +124,12 @@ func (a *App) outboundAdmin(w http.ResponseWriter, r *http.Request, u store.User
 			fail(w, 409)
 			return
 		}
-		out, status := a.hostControl(r.Context(), "outbound-apply", map[string]string{"plan": n.Plan})
-		if status == 200 {
-			tag, _ := out["tag"].(string)
-			if tag != "" && out["deleted"] == true {
-				_, e = a.DB.Exec("DELETE FROM nodes WHERE server=? AND tag=?", a.ControlServer, tag)
-				if e != nil {
-					out["warning"] = "出站已删除，显示名称清理失败"
-				}
-			} else if tag != "" {
-				e = a.DB.SetOutboundDisplayName(a.ControlServer, tag, n.Node)
-				if e != nil {
-					out["warning"] = "出站已生效，显示名称保存失败"
-				}
-			}
+		if e = a.saveConfigOperation(v.Nonce, u, "outbound-apply", "", n.Node, map[string]string{"plan": n.Plan}, false); e != nil {
+			fail(w, 500)
+			return
 		}
-		a.DB.Exec("INSERT INTO audit(at,name,ip,event) VALUES(?,?,?,?)", time.Now().Unix(), u.Name, "local", "outbound_apply_status:"+http.StatusText(status))
-		reply(w, status, out)
+		a.runConfigOperation(auth.Digest(v.Nonce))
+		a.configOperationStatus(w, r, u, v.Nonce)
 		return
 	}
 	if v.Action != "save" && v.Action != "delete" {

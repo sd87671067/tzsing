@@ -91,6 +91,9 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 	} else if !read(w, r, &v) {
 		return
 	}
+	if (path == "apply" || path == "restore") && a.replayConfigOperation(w, r, fresh, v.Nonce, "apply", v.Node) {
+		return
+	}
 	server, tag, e := a.DB.Resolve(fresh, v.Node)
 	if e != nil || server != a.ControlServer || (!strings.HasPrefix(tag, "inbound:") && !strings.HasPrefix(tag, "identity:")) {
 		fail(w, 403)
@@ -275,10 +278,16 @@ func (a *App) controlAPI(w http.ResponseWriter, r *http.Request, u store.User, p
 			return
 		}
 	}
-	out, status := a.hostControl(r.Context(), hostPath, payload)
-	if status == 200 && (path == "restore" || path == "apply" && fresh.Role == "admin") {
-		a.DB.Exec("DELETE FROM uuid_bindings WHERE node_id=?", v.Node)
+	if path == "apply" || path == "restore" {
+		if e = a.saveConfigOperation(v.Nonce, fresh, "apply", v.Node, "", payload, path == "restore" || fresh.Role == "admin"); e != nil {
+			fail(w, 500)
+			return
+		}
+		a.runConfigOperation(auth.Digest(v.Nonce))
+		a.configOperationStatus(w, r, fresh, v.Nonce)
+		return
 	}
+	out, status := a.hostControl(r.Context(), hostPath, payload)
 	if status == 200 && fresh.Role != "admin" && path == "preview" {
 		// Host preview is for an authorized node, but its internal tag is private.
 		out["preview"] = map[string]string{"protocol": "授权出站", "server": "已授权节点"}

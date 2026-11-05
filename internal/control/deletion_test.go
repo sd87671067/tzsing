@@ -266,8 +266,9 @@ func TestDeleteInboundTransactionCASExpiryRollbackAndReadback(t *testing.T) {
 					t.Fatal("rollback not activated")
 				}
 			}
-			if w = call("/apply", map[string]any{"tag": "shared", "auth_id": id, "plan": token}); w.Code != 409 && w.Code != 403 {
-				t.Fatal("replay accepted")
+			beforeReplay := activations
+			if w = call("/apply", map[string]any{"tag": "shared", "auth_id": id, "plan": token}); (w.Code != 200 && w.Code != 409 && w.Code != 403) || activations != beforeReplay {
+				t.Fatal("replay activated config again")
 			}
 		})
 	}

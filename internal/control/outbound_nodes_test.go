@@ -111,8 +111,8 @@ func TestOutboundTransactionProbeRollbackAndReplay(t *testing.T) {
 	if !bytes.Equal(got, original) || activated != 2 {
 		t.Fatal("rollback failed")
 	}
-	if w = request("/outbound-apply", map[string]any{"plan": p["plan"]}); w.Code != 409 {
-		t.Fatal("replayed plan accepted")
+	if w = request("/outbound-apply", map[string]any{"plan": p["plan"]}); w.Code != 200 || candidateMap(w.Body.Bytes())["state"] != "failed" || activated != 2 {
+		t.Fatal("replay must return the durable failed result without activation")
 	}
 }
 func TestProxyBareSpecialCharactersAndIPv6(t *testing.T) {

@@ -48,7 +48,7 @@ func TestOutboundAdminPermissionSessionNonceAndReplay(t *testing.T) {
 	if r.StatusCode != 200 || out["plan"] != nil || out["nonce"] == nil {
 		t.Fatal("unsafe preview", out)
 	}
-	for i, want := range []int{200, 409} {
+	for i, want := range []int{200, 200} {
 		r = f.req(t, "POST", "/api/admin/outbounds", map[string]any{"action": "apply", "nonce": out["nonce"]}, f.admin, f.acs)
 		r.Body.Close()
 		if r.StatusCode != want {

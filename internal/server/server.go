@@ -211,6 +211,11 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.history(w, r, u)
 		return
 	}
+	// Outcome queries remain available while the mutation holds routeMu.
+	if path == "/api/control/transaction" && r.Method == "GET" {
+		a.configOperationStatus(w, r, u, r.URL.Query().Get("id"))
+		return
+	}
 	// Serialize configuration mutations with grants and revocations. Snapshots
 	// retain their own short lock and never wait for a network operation.
 	if strings.HasPrefix(path, "/api/control/") || strings.HasPrefix(path, "/api/admin/") || path == "/api/personal-outbounds" {
